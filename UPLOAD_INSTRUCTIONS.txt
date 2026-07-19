@@ -1,0 +1,8 @@
+Copy the five Markdown files inside the docs folder into:
+D:\makina_ogrenmesi\Spot-Welding-Parametre-Assistance\docs
+
+Then in GitHub Desktop:
+1. Review the five changed files.
+2. Commit message: docs: add program hierarchy and phased architecture plan
+3. Push origin.
+4. Give Claude the prompt in docs/30_CLAUDE_PHASE_REVIEW_PROMPT.md
