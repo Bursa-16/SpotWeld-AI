@@ -1,0 +1,303 @@
+{
+  "name": "Model-4 Full Interaction Polynomial",
+  "model_version": "1.0",
+  "variables": [
+    "Current",
+    "Force",
+    "Time",
+    "Cooling",
+    "Sequence",
+    "Holding",
+    "SheetThick"
+  ],
+  "units": {
+    "Current": "A",
+    "Force": "daN",
+    "Time": "cycle",
+    "Cooling": "cycle",
+    "Sequence": "cycle",
+    "Holding": "cycle",
+    "SheetThick": "mm"
+  },
+  "intercept": -70.3,
+  "validation_status": "Experimental - requires calibration",
+  "terms": [
+    {
+      "coefficient": 0.0139,
+      "factors": [
+        {
+          "variable": "Current"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.1678,
+      "factors": [
+        {
+          "variable": "Force"
+        }
+      ]
+    },
+    {
+      "coefficient": -1.799,
+      "factors": [
+        {
+          "variable": "Time"
+        }
+      ]
+    },
+    {
+      "coefficient": 10.25,
+      "factors": [
+        {
+          "variable": "Cooling"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.891,
+      "factors": [
+        {
+          "variable": "Sequence"
+        }
+      ]
+    },
+    {
+      "coefficient": 4.156,
+      "factors": [
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": -19.72,
+      "factors": [
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    },
+    {
+      "coefficient": 9e-06,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "Force"
+        }
+      ]
+    },
+    {
+      "coefficient": 3.4e-05,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "Time"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.001484,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "Cooling"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.000197,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "Sequence"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.000507,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": 2.9e-05,
+      "factors": [
+        {
+          "variable": "Current"
+        },
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.005809,
+      "factors": [
+        {
+          "variable": "Force"
+        },
+        {
+          "variable": "Time"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.01413,
+      "factors": [
+        {
+          "variable": "Force"
+        },
+        {
+          "variable": "Cooling"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.000435,
+      "factors": [
+        {
+          "variable": "Force"
+        },
+        {
+          "variable": "Sequence"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.002555,
+      "factors": [
+        {
+          "variable": "Force"
+        },
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.02007,
+      "factors": [
+        {
+          "variable": "Force"
+        },
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.0717,
+      "factors": [
+        {
+          "variable": "Time"
+        },
+        {
+          "variable": "Cooling"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.04775,
+      "factors": [
+        {
+          "variable": "Time"
+        },
+        {
+          "variable": "Sequence"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.04365,
+      "factors": [
+        {
+          "variable": "Time"
+        },
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.3685,
+      "factors": [
+        {
+          "variable": "Time"
+        },
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.0865,
+      "factors": [
+        {
+          "variable": "Cooling"
+        },
+        {
+          "variable": "Sequence"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.3496,
+      "factors": [
+        {
+          "variable": "Cooling"
+        },
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.123,
+      "factors": [
+        {
+          "variable": "Cooling"
+        },
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    },
+    {
+      "coefficient": -0.01809,
+      "factors": [
+        {
+          "variable": "Sequence"
+        },
+        {
+          "variable": "Holding"
+        }
+      ]
+    },
+    {
+      "coefficient": 0.5262,
+      "factors": [
+        {
+          "variable": "Sequence"
+        },
+        {
+          "variable": "SheetThick"
+        }
+      ]
+    }
+  ],
+  "note": "Integrated from provided coefficients; any missing final terms remain excluded."
+}

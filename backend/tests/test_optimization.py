@@ -1,0 +1,9 @@
+def test_model4_prediction(client,auth_headers):
+ r=client.post('/api/v1/optimization/model4/predict',headers=auth_headers,json={'Current':8000,'Force':300,'Time':12,'Cooling':0,'Sequence':15,'Holding':15,'SheetThick':1.0}); assert r.status_code==200; assert 'prediction_mm' in r.json(); assert r.json()['top_contributions']
+def test_ensemble_prediction(client,auth_headers):
+ r=client.post('/api/v1/optimization/ensemble',headers=auth_headers,json={'members':[{'model_name':'OEM','prediction_mm':5.5,'weight':.5},{'model_name':'Model-4','prediction_mm':5.1,'weight':.3},{'model_name':'4sqrt','prediction_mm':4.0,'weight':.2}]}); assert r.status_code==200; b=r.json(); assert 4<=b['prediction_mm']<=5.5; assert b['upper_mm']>=b['lower_mm']
+def test_doe_optimization(client,auth_headers):
+ r=client.post('/api/v1/optimization/doe',headers=auth_headers,json={'material_family':'Düşük / Orta Karbonlu Çelik','thickness_mm':1,'min_nugget_mm':4.2,'target_nugget_mm':5.2,'current_min_ka':6,'current_max_ka':8,'current_step_ka':1,'time_min_cycles':8,'time_max_cycles':10,'time_step_cycles':1,'force_min_kn':2,'force_max_kn':3,'force_step_kn':.5}); assert r.status_code==200; assert r.json()['evaluated_count']==27; assert r.json()['best'] is not None
+def test_model_validation(client,auth_headers):
+ rows=[{'Current':7000,'Force':300,'Time':12,'Cooling':0,'Sequence':15,'Holding':15,'SheetThick':1,'actual_nugget_mm':4.6},{'Current':7500,'Force':300,'Time':12,'Cooling':0,'Sequence':15,'Holding':15,'SheetThick':1,'actual_nugget_mm':4.9},{'Current':8000,'Force':300,'Time':12,'Cooling':0,'Sequence':15,'Holding':15,'SheetThick':1,'actual_nugget_mm':5.2}]
+ r=client.post('/api/v1/optimization/model4/validate',headers=auth_headers,json={'rows':rows}); assert r.status_code==200; assert r.json()['sample_count']==3; assert 'rmse_mm' in r.json()

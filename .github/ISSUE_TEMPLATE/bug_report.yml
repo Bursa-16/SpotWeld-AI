@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible software or engineering defect
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, inputs, and units

@@ -1,0 +1,28 @@
+name: Engineering model change
+description: Request a rule, formula, model, or material-engine change
+title: "[ENGINEERING] "
+labels: ["engineering"]
+body:
+  - type: textarea
+    id: requirement
+    attributes:
+      label: Engineering requirement
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source and revision
+      description: OEM standard, validated dataset, paper, or internal rule
+    validations:
+      required: true
+  - type: textarea
+    id: units
+    attributes:
+      label: Variables, units, and applicability range
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation evidence and acceptance criteria
