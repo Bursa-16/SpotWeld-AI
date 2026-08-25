@@ -35,6 +35,7 @@ REGISTRY_TABLES = {
     "engineering_rule_revisions",
     "evidence_references",
     "governed_audit_events",
+    "governed_command_receipts",
 }
 
 
@@ -225,7 +226,7 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert REGISTRY_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0003_registry_foundation"
+                "0004_persistent_idempotency"
             )
             for table_name in REGISTRY_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
@@ -406,6 +407,53 @@ def test_registry_migration_contains_no_seed_or_prototype_import():
     source = migration_path.read_text(encoding="utf-8")
     normalized = source.lower()
 
+    assert "bulk_insert" not in normalized
+    assert "op.execute" not in normalized
+    assert "get_bind" not in normalized
+    assert "rules_engine" not in normalized
+    assert "default_rules" not in normalized
+    assert "app.domain.engine" not in normalized
+
+
+def test_persistent_idempotency_migration_downgrades_to_registry_head(
+    migration_database_dir,
+    monkeypatch,
+):
+    database_url = _sqlite_url(
+        migration_database_dir / "idempotency_downgrade.db"
+    )
+    _run_upgrade(monkeypatch, database_url, "head")
+
+    with _sqlite_engine(database_url) as upgraded_engine:
+        assert "governed_command_receipts" in inspect(
+            upgraded_engine
+        ).get_table_names()
+
+    _run_downgrade(monkeypatch, database_url, "0003_registry_foundation")
+
+    with _sqlite_engine(database_url) as downgraded_engine:
+        tables = set(inspect(downgraded_engine).get_table_names())
+        assert "governed_command_receipts" not in tables
+        assert {
+            "engineering_rules",
+            "engineering_rule_revisions",
+            "evidence_references",
+            "governed_audit_events",
+        } <= tables
+        with downgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0003_registry_foundation"
+            )
+
+
+def test_persistent_idempotency_migration_contains_no_seed_or_prototype_import():
+    migration_path = (
+        BACKEND_ROOT / "alembic" / "versions" / "0004_persistent_idempotency.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+    normalized = source.lower()
+
+    assert 'down_revision = "0003_registry_foundation"' in source
     assert "bulk_insert" not in normalized
     assert "op.execute" not in normalized
     assert "get_bind" not in normalized

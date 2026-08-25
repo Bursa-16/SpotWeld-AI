@@ -7,6 +7,7 @@ from types import TracebackType
 from sqlalchemy.orm import Session
 
 from app.repositories.governance_repository import GovernanceRepository
+from app.repositories.idempotency_repository import IdempotencyRepository
 
 
 class GovernedUnitOfWork:
@@ -21,6 +22,7 @@ class GovernedUnitOfWork:
     def __init__(self, session: Session):
         self.session = session
         self.governance_repository = GovernanceRepository(session)
+        self.idempotency_repository = IdempotencyRepository(session)
         self._entered = False
         self._finalized = False
 

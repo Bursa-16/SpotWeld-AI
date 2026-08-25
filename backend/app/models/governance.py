@@ -4,12 +4,25 @@ from datetime import datetime
 from enum import Enum as PythonEnum
 from typing import TypeVar
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, JSON, String, Text, event, inspect
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    inspect,
+)
 from sqlalchemy.orm import Mapped, Mapper, mapped_column
 from sqlalchemy.types import TypeDecorator
 
 from app.db.session import Base
 from app.domain.governance_types import ImmutableRecordError
+from app.domain.idempotency_types import CommandReceiptStatus
 from app.models.entities import utc_now
 
 
@@ -128,6 +141,84 @@ class GovernedAuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class GovernedCommandReceipt(Base):
+    """Durable idempotency receipt for a governed command identity."""
+
+    __tablename__ = "governed_command_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "command_namespace",
+            "command_scope",
+            "idempotency_key",
+            name="uq_governed_command_receipts_command_identity",
+        ),
+        CheckConstraint(
+            "(status = 'RESERVED' AND completed_at IS NULL "
+            "AND result_type IS NULL AND result_id IS NULL "
+            "AND result_revision IS NULL) OR "
+            "(status = 'COMPLETED' AND completed_at IS NOT NULL "
+            "AND result_type IS NOT NULL AND result_id IS NOT NULL "
+            "AND result_revision IS NOT NULL)",
+            name="ck_governed_command_receipts_completion_shape",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    receipt_id: Mapped[str] = mapped_column(String(120), unique=True)
+    command_namespace: Mapped[str] = mapped_column(String(120))
+    command_scope: Mapped[str] = mapped_column(String(200))
+    idempotency_key: Mapped[str] = mapped_column(String(120))
+    request_hash: Mapped[str] = mapped_column(String(128))
+    status: Mapped[CommandReceiptStatus] = mapped_column(
+        portable_enum(
+            CommandReceiptStatus,
+            "ck_governed_command_receipts_status",
+        )
+    )
+    result_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    result_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_revision: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(120), index=True)
+    schema_version: Mapped[str] = mapped_column(String(40))
+    software_version: Mapped[str] = mapped_column(String(80))
+    canonicalization_version: Mapped[str] = mapped_column(String(40))
+    hash_algorithm: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+def _guard_command_receipt_update(mapper: Mapper, _connection, target: object) -> None:
+    state = inspect(target)
+    changed_columns = {
+        attribute.key
+        for attribute in mapper.column_attrs
+        if state.attrs[attribute.key].history.has_changes()
+    }
+    status_history = state.attrs.status.history
+    prior_status = status_history.deleted[0] if status_history.deleted else target.status
+    completion_fields = {
+        "status",
+        "result_type",
+        "result_id",
+        "result_revision",
+        "completed_at",
+    }
+    if not (
+        prior_status == CommandReceiptStatus.RESERVED
+        and target.status == CommandReceiptStatus.COMPLETED
+        and changed_columns == completion_fields
+    ):
+        fields = ", ".join(sorted(changed_columns)) or "none"
+        raise ImmutableRecordError(
+            "GovernedCommandReceipt permits only one RESERVED-to-COMPLETED "
+            f"transition; changed fields: {fields}"
+        )
+
+
 freeze_json_attribute(GovernedAuditEvent.authority_scope)
 freeze_json_attribute(GovernedAuditEvent.detail)
 protect_immutable_model(GovernedAuditEvent)
+event.listen(GovernedCommandReceipt, "before_update", _guard_command_receipt_update)
+event.listen(GovernedCommandReceipt, "before_delete", _reject_delete)
