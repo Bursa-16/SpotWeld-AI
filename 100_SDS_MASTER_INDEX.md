@@ -108,7 +108,7 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | DRAFT | RESERVED / NOT YET CREATED | Security/Governance Owner — assignment pending | Architecture, Security, Data Owner | PENDING | None |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | DRAFT | FILE PRESENT / DRAFT | Security/Governance Owner — assignment pending | Architecture, Security, Data Owner | PENDING | None |
 
 ## 8. Reconciliation record
 
@@ -119,8 +119,8 @@ change that approval state.
   reserved; its absence does not make the number reusable.
 - SDS-111 through SDS-114 are formally registered without changing their file
   contents or implying formal approval.
-- SDS-115 is reserved for the Evidence Verification Authority Policy. Its file
-  does not yet exist, and reservation does not approve that policy.
+- SDS-115 is registered for the Evidence Verification Authority Policy. Its
+  file is present in DRAFT state, and file presence does not approve that policy.
 - The legacy duplicate prefixes `00` through `30` remain outside the governed
   SDS namespace and do not affect this registry.
 
