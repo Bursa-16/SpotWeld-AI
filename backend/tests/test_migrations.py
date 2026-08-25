@@ -36,6 +36,7 @@ REGISTRY_TABLES = {
     "evidence_references",
     "governed_audit_events",
     "governed_command_receipts",
+    "rule_applicabilities",
 }
 
 
@@ -226,7 +227,7 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert REGISTRY_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0004_persistent_idempotency"
+                "0005_registry_evidence_applicability"
             )
             for table_name in REGISTRY_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
@@ -460,3 +461,55 @@ def test_persistent_idempotency_migration_contains_no_seed_or_prototype_import()
     assert "rules_engine" not in normalized
     assert "default_rules" not in normalized
     assert "app.domain.engine" not in normalized
+
+
+def test_registry_evidence_applicability_migration_round_trip(
+    migration_database_dir,
+    monkeypatch,
+):
+    database_url = _sqlite_url(migration_database_dir / "registry_r2_round_trip.db")
+    _run_upgrade(monkeypatch, database_url, "0004_persistent_idempotency")
+    with _sqlite_engine(database_url) as prior_engine:
+        assert "rule_applicabilities" not in inspect(prior_engine).get_table_names()
+        assert "revision_number" not in {
+            column["name"]
+            for column in inspect(prior_engine).get_columns("evidence_references")
+        }
+
+    _run_upgrade(monkeypatch, database_url, "0005_registry_evidence_applicability")
+    with _sqlite_engine(database_url) as upgraded_engine:
+        inspector = inspect(upgraded_engine)
+        assert "rule_applicabilities" in inspector.get_table_names()
+        evidence_columns = {
+            column["name"] for column in inspector.get_columns("evidence_references")
+        }
+        assert {"revision_number", "supersedes_evidence_reference_id", "availability"} <= evidence_columns
+        _assert_registry_schema_matches_models(upgraded_engine)
+
+    _run_downgrade(monkeypatch, database_url, "0004_persistent_idempotency")
+    with _sqlite_engine(database_url) as downgraded_engine:
+        inspector = inspect(downgraded_engine)
+        assert "rule_applicabilities" not in inspector.get_table_names()
+        evidence_columns = {
+            column["name"] for column in inspector.get_columns("evidence_references")
+        }
+        assert "revision_number" not in evidence_columns
+        with downgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0004_persistent_idempotency"
+            )
+
+
+def test_registry_evidence_applicability_migration_has_no_seed_or_prototype_import():
+    migration_path = (
+        BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "0005_registry_evidence_applicability.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+    normalized = source.lower()
+    assert 'down_revision = "0004_persistent_idempotency"' in source
+    assert "bulk_insert" not in normalized
+    assert "rules_engine" not in normalized
+    assert "default_rules" not in normalized

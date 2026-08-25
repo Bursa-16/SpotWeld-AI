@@ -46,6 +46,30 @@ class MissingHandling(StrEnum):
     SKIP_OPTIONAL = "SKIP_OPTIONAL"
 
 
+class EvidenceAvailability(StrEnum):
+    """Physical/reference availability only; never an authority assertion."""
+
+    UNKNOWN = "UNKNOWN"
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class ApplicabilityDimension(StrEnum):
+    """Design-approved categorical applicability dimensions for R2 storage."""
+
+    MACHINE = "MACHINE"
+    WELD_GUN = "WELD_GUN"
+    STATION_ROBOT_OPERATION = "STATION_ROBOT_OPERATION"
+    MATERIAL_FAMILY = "MATERIAL_FAMILY"
+    SHEET_STACK = "SHEET_STACK"
+    ELECTRODE_TIP = "ELECTRODE_TIP"
+    PROCESS_PARAMETER_SCHEDULE = "PROCESS_PARAMETER_SCHEDULE"
+    CUSTOMER_OEM_CONTEXT = "CUSTOMER_OEM_CONTEXT"
+    CATEGORY = "CATEGORY"
+    RULE_LIFECYCLE_EFFECTIVE_DATE = "RULE_LIFECYCLE_EFFECTIVE_DATE"
+    EQUIPMENT_CONFIGURATION = "EQUIPMENT_CONFIGURATION"
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceReferenceDraft:
     evidence_id: str
@@ -66,3 +90,12 @@ class EvidenceReferenceDraft:
     schema_version: str | None = None
     hash_algorithm: str | None = None
     content_hash: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceRevisionDraft(EvidenceReferenceDraft):
+    """Append-only R2 evidence revision and correction input."""
+
+    revision_number: int = 1
+    availability: EvidenceAvailability = EvidenceAvailability.UNKNOWN
+    supersedes_evidence_reference_id: int | None = None

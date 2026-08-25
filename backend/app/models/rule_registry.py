@@ -24,6 +24,8 @@ from app.domain.governance_types import (
     RuleLifecycleStatus,
 )
 from app.domain.rule_registry_types import (
+    ApplicabilityDimension,
+    EvidenceAvailability,
     MissingHandling,
     RuleCategory,
     RuleOperator,
@@ -188,6 +190,45 @@ class EvidenceReference(Base):
             "evidence_revision",
             name="uq_evidence_references_revision_identity",
         ),
+        UniqueConstraint(
+            "engineering_rule_revision_id",
+            "evidence_id",
+            "revision_number",
+            name="uq_evidence_references_logical_revision",
+        ),
+        UniqueConstraint(
+            "engineering_rule_revision_id",
+            "evidence_id",
+            "id",
+            name="uq_evidence_references_context_internal_id",
+        ),
+        UniqueConstraint(
+            "supersedes_evidence_reference_id",
+            name="uq_evidence_references_single_successor",
+        ),
+        ForeignKeyConstraint(
+            [
+                "engineering_rule_revision_id",
+                "evidence_id",
+                "supersedes_evidence_reference_id",
+            ],
+            [
+                "evidence_references.engineering_rule_revision_id",
+                "evidence_references.evidence_id",
+                "evidence_references.id",
+            ],
+            name="fk_evidence_references_same_context_supersession",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "revision_number > 0",
+            name="ck_evidence_references_positive_revision_number",
+        ),
+        CheckConstraint(
+            "supersedes_evidence_reference_id IS NULL "
+            "OR supersedes_evidence_reference_id != id",
+            name="ck_evidence_references_not_self_superseding",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -196,6 +237,17 @@ class EvidenceReference(Base):
     )
     evidence_id: Mapped[str] = mapped_column(String(120))
     evidence_revision: Mapped[str] = mapped_column(String(80))
+    revision_number: Mapped[int] = mapped_column(Integer, default=1)
+    supersedes_evidence_reference_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    availability: Mapped[EvidenceAvailability] = mapped_column(
+        portable_enum(
+            EvidenceAvailability,
+            "ck_evidence_references_availability",
+        ),
+        default=EvidenceAvailability.UNKNOWN,
+    )
     source_type: Mapped[RuleSourceType | None] = mapped_column(
         portable_enum(
             RuleSourceType,
@@ -247,6 +299,87 @@ class EvidenceReference(Base):
     )
 
 
+class RuleApplicability(Base):
+    """Immutable R2 predicate persistence; this model performs no resolution."""
+
+    __tablename__ = "rule_applicabilities"
+    __table_args__ = (
+        UniqueConstraint(
+            "engineering_rule_id",
+            "applicability_id",
+            "applicability_revision",
+            name="uq_rule_applicabilities_revision_identity",
+        ),
+        UniqueConstraint(
+            "engineering_rule_id",
+            "applicability_id",
+            "id",
+            name="uq_rule_applicabilities_context_internal_id",
+        ),
+        UniqueConstraint(
+            "supersedes_applicability_id",
+            name="uq_rule_applicabilities_single_successor",
+        ),
+        ForeignKeyConstraint(
+            ["engineering_rule_id", "engineering_rule_revision_id"],
+            [
+                "engineering_rule_revisions.engineering_rule_id",
+                "engineering_rule_revisions.id",
+            ],
+            name="fk_rule_applicabilities_exact_rule_revision",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            [
+                "engineering_rule_id",
+                "applicability_id",
+                "supersedes_applicability_id",
+            ],
+            [
+                "rule_applicabilities.engineering_rule_id",
+                "rule_applicabilities.applicability_id",
+                "rule_applicabilities.id",
+            ],
+            name="fk_rule_applicabilities_same_rule_supersession",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "applicability_revision > 0",
+            name="ck_rule_applicabilities_positive_revision",
+        ),
+        CheckConstraint(
+            "supersedes_applicability_id IS NULL "
+            "OR supersedes_applicability_id != id",
+            name="ck_rule_applicabilities_not_self_superseding",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    engineering_rule_id: Mapped[int] = mapped_column(Integer)
+    engineering_rule_revision_id: Mapped[int] = mapped_column(Integer, index=True)
+    applicability_id: Mapped[str] = mapped_column(String(120))
+    applicability_revision: Mapped[int] = mapped_column(Integer)
+    supersedes_applicability_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    dimension: Mapped[ApplicabilityDimension] = mapped_column(
+        portable_enum(
+            ApplicabilityDimension,
+            "ck_rule_applicabilities_dimension",
+        )
+    )
+    allowed_values: Mapped[dict] = mapped_column(ImmutableJSON)
+    policy_version: Mapped[str] = mapped_column(String(40))
+    schema_version: Mapped[str] = mapped_column(String(40))
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_by_actor_id: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    engineering_rule_revision: Mapped[EngineeringRuleRevision] = relationship()
+
+
 def _reject_phase1_authority_revision(_mapper, _connection, target) -> None:
     if target.evidence_class == EvidenceClass.SOURCE_BACKED or target.enabled:
         raise RegistryAuthorityError(
@@ -262,9 +395,24 @@ def _guard_phase1_evidence_insert(_mapper, _connection, target) -> None:
         RuleLifecycleStatus.REVIEW,
     }:
         raise RegistryAuthorityError("Phase 1 evidence must remain DRAFT or REVIEW")
+    if any(
+        value is not None
+        for value in (
+            target.verified_by_user_id,
+            target.verified_by_actor_id,
+            target.verified_at,
+            target.approved_by_user_id,
+            target.approved_by_actor_id,
+            target.approved_at,
+        )
+    ):
+        raise RegistryAuthorityError(
+            "R2 draft evidence cannot carry verification or approval metadata"
+        )
     session = object_session(target)
     parent_revision = target.engineering_rule_revision
-    if (
+    created_by_r2_repository = getattr(target, "_r2_evidence_revision", False)
+    if not created_by_r2_repository and (
         session is None
         or parent_revision is None
         or parent_revision not in session.new
@@ -276,6 +424,7 @@ def _guard_phase1_evidence_insert(_mapper, _connection, target) -> None:
 
 freeze_json_attribute(EngineeringRuleRevision.applicability_metadata)
 freeze_json_attribute(EvidenceReference.reference_metadata)
+freeze_json_attribute(RuleApplicability.allowed_values)
 event.listen(
     EngineeringRuleRevision,
     "before_insert",
@@ -285,3 +434,4 @@ event.listen(EvidenceReference, "before_insert", _guard_phase1_evidence_insert)
 protect_immutable_model(EngineeringRule)
 protect_immutable_model(EngineeringRuleRevision)
 protect_immutable_model(EvidenceReference)
+protect_immutable_model(RuleApplicability)
