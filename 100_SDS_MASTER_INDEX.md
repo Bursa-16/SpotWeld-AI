@@ -131,12 +131,12 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | APPROVED / RECORDED | `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0` |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | APPROVED | FILE PRESENT / APPROVED | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | APPROVED / RECORDED | `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0` |
 
 ### 7.1 SDS-115 review metadata
 
 - Version: `0.1 Draft`.
-- Formal status: `IN_REVIEW` through a governance-metadata-only transition.
+- Formal status: `APPROVED` through a governance-metadata-only transition.
 - Document-approval model: `SOLO_PROJECT_OWNER_APPROVAL`.
 - Required formal document approver: Project Owner / Accountable Human Owner.
 - Accountable human owner: İlhan Çekiç.
@@ -154,8 +154,8 @@ change that approval state.
   `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
 - Durable Project Owner approval evidence reference:
   `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0`.
-- The approval does not transition SDS-115 to `APPROVED` and grants no runtime
-  verification, implementation, or migration 0006 authority.
+- The formal `APPROVED` transition records document status only and grants no
+  runtime verification, implementation, or migration 0006 authority.
 - Document-owner self-approval: permitted for this solo-project profile after
   the fresh review-content reference is established.
 - Prior Architecture approval status:
@@ -186,9 +186,9 @@ change that approval state.
 - SDS-111 through SDS-114 are formally registered without changing their file
   contents or implying formal approval.
 - SDS-115 is registered for the Evidence Verification Authority Policy. Its
-  file is present in `IN_REVIEW` state through a governance-metadata-only
-  transition. File presence, owner assignment, and the status transition do
-  not approve that policy.
+  file is present in `APPROVED` state following the recorded Project Owner
+  approval and a governance-metadata-only formal-status transition. This
+  status does not by itself grant implementation authority.
 - The legacy duplicate prefixes `00` through `30` remain outside the governed
   SDS namespace and do not affect this registry.
 

@@ -3,7 +3,7 @@
 **Document ID:** SDS-115
 **Title:** Evidence Verification Authority Policy
 **Version:** 0.1 Draft
-**Formal Status:** IN_REVIEW
+**Formal Status:** APPROVED
 **Canonical Path:** `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
 **Accountable Human Owner:** İlhan Çekiç
 **Owner Role:** Security/Governance Owner
@@ -375,7 +375,8 @@ document approval for this review cycle. Advisory rows do not imply approval.
   `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0`.
 - This decision grants no runtime verification authority, Security bypass,
   implementation authority, or migration 0006 authority.
-- SDS-115 remains `IN_REVIEW` until a separate formal-status transition.
+- SDS-115 is formally `APPROVED`; this status grants no implementation
+  authority without the separate implementation-unlock gate.
 
 ### 17.3 Historical Architecture approval metadata
 
@@ -499,7 +500,7 @@ separation rules represented in Sections 4–16.
 ## 22. Final policy state
 
 ```text
-FORMAL_STATUS = IN_REVIEW
+FORMAL_STATUS = APPROVED
 APPROVAL_STATE = APPROVED / RECORDED
 DOCUMENT_APPROVAL_MODEL = SOLO_PROJECT_OWNER_APPROVAL
 REQUIRED_FORMAL_DOCUMENT_APPROVER = PROJECT OWNER / ACCOUNTABLE HUMAN OWNER
