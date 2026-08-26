@@ -10,7 +10,7 @@
 **Document Approval Model:** SOLO_PROJECT_OWNER_APPROVAL
 **Required Formal Document Approver:** Project Owner / Accountable Human Owner
 **Optional Advisory Review Roles:** Architecture, Security, Data Owner
-**Approval State:** PENDING / NOT YET ISSUED
+**Approval State:** APPROVED / RECORDED
 **Fresh Reviewed Normative Content Reference:** `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
 **Review Reference Identifies Normative Content:** YES
 **Future Metadata-Transition Commit Is Review Reference:** NO
@@ -352,14 +352,32 @@ not unlock
 
 | Role | Status | Durable Approver Identity | UTC Approval Timestamp | Approved Version | Approval Evidence / Reference |
 |---|---|---|---|---|---|
-| Project Owner / Accountable Human Owner | PENDING | İlhan Çekiç | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
+| Project Owner / Accountable Human Owner | APPROVED / RECORDED | İlhan Çekiç | 2026-08-26T11:11:37.788Z | 0.1 Draft | `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0` |
 | Architecture advisory | HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE | İlhan Çekiç | 2026-08-26T09:10:11.889Z | 0.1 Draft | Original evidence preserved at `b159cf1b493fcf740a6b3380143ade0d2224d05d:docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md`, SHA-256 `5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab` |
 | Security advisory | OPTIONAL / NOT RECORDED | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE |
 | Data Owner advisory | OPTIONAL / NOT RECORDED | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE |
 
-No row in this table implies approval.
+Only the Project Owner / Accountable Human Owner row records the formal
+document approval for this review cycle. Advisory rows do not imply approval.
 
-### 17.2 Historical Architecture approval metadata
+### 17.2 Recorded Project Owner approval metadata
+
+- Approval role: Project Owner / Accountable Human Owner.
+- Durable human approver identity: İlhan Çekiç.
+- Approver role and authority: Security/Governance Owner; required formal
+  document approver under `SOLO_PROJECT_OWNER_APPROVAL`.
+- Decision: `APPROVE`.
+- UTC decision timestamp: `2026-08-26T11:11:37.788Z`.
+- Approved document version: `0.1 Draft`.
+- Reviewed normative content reference:
+  `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- Durable approval evidence reference:
+  `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0`.
+- This decision grants no runtime verification authority, Security bypass,
+  implementation authority, or migration 0006 authority.
+- SDS-115 remains `IN_REVIEW` until a separate formal-status transition.
+
+### 17.3 Historical Architecture approval metadata
 
 - Approval role: Architecture.
 - Current status: `HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE`.
@@ -378,7 +396,7 @@ No row in this table implies approval.
 - This historical Architecture approval granted no runtime verification,
   implementation, or migration 0006 authority.
 
-### 17.3 Solo-project document-approval governance
+### 17.4 Solo-project document-approval governance
 
 - Required formal document approver: Project Owner / Accountable Human Owner.
 - Accountable human owner: İlhan Çekiç.
@@ -482,11 +500,11 @@ separation rules represented in Sections 4–16.
 
 ```text
 FORMAL_STATUS = IN_REVIEW
-APPROVAL_STATE = PENDING / NOT YET ISSUED
+APPROVAL_STATE = APPROVED / RECORDED
 DOCUMENT_APPROVAL_MODEL = SOLO_PROJECT_OWNER_APPROVAL
 REQUIRED_FORMAL_DOCUMENT_APPROVER = PROJECT OWNER / ACCOUNTABLE HUMAN OWNER
 ACCOUNTABLE_HUMAN_OWNER = İLHAN ÇEKİÇ
-REQUIRED_OWNER_APPROVAL = PENDING / NOT YET ISSUED
+REQUIRED_OWNER_APPROVAL = APPROVED / RECORDED
 PRIOR_ARCHITECTURE_APPROVAL = HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE
 ARCHITECTURE_ADVISORY_REVIEW = OPTIONAL
 SECURITY_ADVISORY_REVIEW = OPTIONAL

@@ -131,7 +131,7 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | PENDING | None |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | APPROVED / RECORDED | `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0` |
 
 ### 7.1 SDS-115 review metadata
 
@@ -145,7 +145,17 @@ change that approval state.
   `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
 - The review-content reference identifies the committed normative policy; it
   is not the future governance-metadata transition commit.
-- Required owner approval: `PENDING / NOT YET ISSUED`.
+- Required owner approval: `APPROVED / RECORDED`.
+- Project Owner approver: İlhan Çekiç.
+- Approval role: Project Owner / Accountable Human Owner.
+- Project Owner approval UTC timestamp: `2026-08-26T11:11:37.788Z`.
+- Approved version: `0.1 Draft`.
+- Approved review-content reference:
+  `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- Durable Project Owner approval evidence reference:
+  `path=docs/approvals/SDS_115_PROJECT_OWNER_APPROVAL_0_1_DRAFT.md;sha256=9f4e8c84091c6bfd0565273210449d7721451ca19862c6298e7b1709bdbe1ef0`.
+- The approval does not transition SDS-115 to `APPROVED` and grants no runtime
+  verification, implementation, or migration 0006 authority.
 - Document-owner self-approval: permitted for this solo-project profile after
   the fresh review-content reference is established.
 - Prior Architecture approval status:
