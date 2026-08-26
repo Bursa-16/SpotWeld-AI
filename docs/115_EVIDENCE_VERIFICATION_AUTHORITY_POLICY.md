@@ -345,11 +345,27 @@ no implementation authority, and does not unlock
 
 | Required role | Status | Durable Approver Identity | UTC Approval Timestamp | Approved Version | Approval Evidence / Reference |
 |---|---|---|---|---|---|
-| Architecture | PENDING | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
+| Architecture | APPROVED / RECORDED | İlhan Çekiç | 2026-08-26T09:10:11.889Z | 0.1 Draft | `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab` |
 | Security | PENDING | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
 | Data Owner | PENDING | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
 
 No row in this table implies approval.
+
+### 17.2 Recorded Architecture approval metadata
+
+- Approval role: Architecture.
+- Durable human approver identity: İlhan Çekiç.
+- Decision: `APPROVE`.
+- UTC decision timestamp: `2026-08-26T09:10:11.889Z`.
+- Approved document version: `0.1 Draft`.
+- Reviewed normative content reference:
+  `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- Durable approval evidence reference:
+  `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
+- Security approval remains `PENDING`.
+- Data Owner approval remains `PENDING`.
+- This Architecture approval grants no verification, implementation, or
+  migration 0006 authority.
 
 ## 18. Implementation unlock gate
 
@@ -435,6 +451,9 @@ not modify or supersede SDS-111, SDS-112, or SDS-114.
 ```text
 FORMAL_STATUS = IN_REVIEW
 APPROVAL_STATE = PENDING
+ARCHITECTURE_APPROVAL = APPROVED / RECORDED
+SECURITY_APPROVAL = PENDING
+DATA_OWNER_APPROVAL = PENDING
 IMPLEMENTATION_UNLOCKED = NO
 MIGRATION_0006_ALLOWED = NO
 EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION = BLOCKED

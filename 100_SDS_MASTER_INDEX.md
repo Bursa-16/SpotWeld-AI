@@ -119,7 +119,15 @@ change that approval state.
   `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
 - The reviewed-content reference identifies the immutable normative policy
   content; it is not the future metadata/status commit.
-- Architecture approval: `PENDING`.
+- Architecture approval: `APPROVED / RECORDED`.
+- Architecture approver: İlhan Çekiç.
+- Architecture approval role: Architecture.
+- Architecture approval UTC timestamp: `2026-08-26T09:10:11.889Z`.
+- Architecture approved version: `0.1 Draft`.
+- Architecture reviewed normative content reference:
+  `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- Architecture durable approval evidence reference:
+  `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
 - Security approval: `PENDING`.
 - Data Owner approval: `PENDING`.
 - Owner assignment and the `IN_REVIEW` transition grant no approval.
