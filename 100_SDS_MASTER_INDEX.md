@@ -131,19 +131,21 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | DRAFT | FILE PRESENT / DRAFT | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | PENDING | None |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | PENDING | None |
 
 ### 7.1 SDS-115 review metadata
 
 - Version: `0.1 Draft`.
-- Formal status: `DRAFT` because the document-approval governance changed.
+- Formal status: `IN_REVIEW` through a governance-metadata-only transition.
 - Document-approval model: `SOLO_PROJECT_OWNER_APPROVAL`.
 - Required formal document approver: Project Owner / Accountable Human Owner.
 - Accountable human owner: İlhan Çekiç.
 - Owner role: Security/Governance Owner.
-- Fresh review-content reference: `PENDING` until the governance revision is
-  committed; the future reference must identify that exact committed policy.
-- Required owner approval: `PENDING`.
+- Fresh immutable review-content reference:
+  `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- The review-content reference identifies the committed normative policy; it
+  is not the future governance-metadata transition commit.
+- Required owner approval: `PENDING / NOT YET ISSUED`.
 - Document-owner self-approval: permitted for this solo-project profile after
   the fresh review-content reference is established.
 - Prior Architecture approval status:
@@ -174,8 +176,9 @@ change that approval state.
 - SDS-111 through SDS-114 are formally registered without changing their file
   contents or implying formal approval.
 - SDS-115 is registered for the Evidence Verification Authority Policy. Its
-  file is present in `DRAFT` state following a normative document-governance
-  revision. File presence and owner assignment do not approve that policy.
+  file is present in `IN_REVIEW` state through a governance-metadata-only
+  transition. File presence, owner assignment, and the status transition do
+  not approve that policy.
 - The legacy duplicate prefixes `00` through `30` remain outside the governed
   SDS namespace and do not affect this registry.
 

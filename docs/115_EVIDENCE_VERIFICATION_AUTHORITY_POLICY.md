@@ -3,17 +3,19 @@
 **Document ID:** SDS-115
 **Title:** Evidence Verification Authority Policy
 **Version:** 0.1 Draft
-**Formal Status:** DRAFT
+**Formal Status:** IN_REVIEW
 **Canonical Path:** `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
 **Accountable Human Owner:** İlhan Çekiç
 **Owner Role:** Security/Governance Owner
 **Document Approval Model:** SOLO_PROJECT_OWNER_APPROVAL
 **Required Formal Document Approver:** Project Owner / Accountable Human Owner
 **Optional Advisory Review Roles:** Architecture, Security, Data Owner
-**Approval State:** PENDING
-**Fresh Reviewed Normative Content Reference:** PENDING until this governance
-revision is committed and submitted for a new review cycle.
+**Approval State:** PENDING / NOT YET ISSUED
+**Fresh Reviewed Normative Content Reference:** `866782f98b3f868fceb688186fadfd670ad8b390:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
+**Review Reference Identifies Normative Content:** YES
+**Future Metadata-Transition Commit Is Review Reference:** NO
 **Owner Assignment Grants Approval:** NO
+**IN_REVIEW Transition Grants Approval:** NO
 **Document Owner Self-Approval Permitted:** YES, for this solo-project document
 governance profile after a fresh review-content reference is established.
 **Runtime Verification Authority Granted:** NO
@@ -479,12 +481,12 @@ separation rules represented in Sections 4–16.
 ## 22. Final policy state
 
 ```text
-FORMAL_STATUS = DRAFT
-APPROVAL_STATE = PENDING
+FORMAL_STATUS = IN_REVIEW
+APPROVAL_STATE = PENDING / NOT YET ISSUED
 DOCUMENT_APPROVAL_MODEL = SOLO_PROJECT_OWNER_APPROVAL
 REQUIRED_FORMAL_DOCUMENT_APPROVER = PROJECT OWNER / ACCOUNTABLE HUMAN OWNER
 ACCOUNTABLE_HUMAN_OWNER = İLHAN ÇEKİÇ
-REQUIRED_OWNER_APPROVAL = PENDING
+REQUIRED_OWNER_APPROVAL = PENDING / NOT YET ISSUED
 PRIOR_ARCHITECTURE_APPROVAL = HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE
 ARCHITECTURE_ADVISORY_REVIEW = OPTIONAL
 SECURITY_ADVISORY_REVIEW = OPTIONAL
