@@ -3,18 +3,21 @@
 **Document ID:** SDS-115
 **Title:** Evidence Verification Authority Policy
 **Version:** 0.1 Draft
-**Formal Status:** IN_REVIEW
+**Formal Status:** DRAFT
 **Canonical Path:** `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
 **Accountable Human Owner:** İlhan Çekiç
 **Owner Role:** Security/Governance Owner
-**Required Approvals:** Architecture, Security, Data Owner
+**Document Approval Model:** SOLO_PROJECT_OWNER_APPROVAL
+**Required Formal Document Approver:** Project Owner / Accountable Human Owner
+**Optional Advisory Review Roles:** Architecture, Security, Data Owner
 **Approval State:** PENDING
-**Reviewed Normative Content Reference:** `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
-**Current Metadata/Status Commit:** Not recorded; this transition does not
-self-reference its future commit.
+**Fresh Reviewed Normative Content Reference:** PENDING until this governance
+revision is committed and submitted for a new review cycle.
 **Owner Assignment Grants Approval:** NO
-**IN_REVIEW Transition Grants Approval:** NO
-**Owner May Serve as Security Approver:** NO
+**Document Owner Self-Approval Permitted:** YES, for this solo-project document
+governance profile after a fresh review-content reference is established.
+**Runtime Verification Authority Granted:** NO
+**Runtime Separation-of-Duties Bypass:** NO
 **Supersedes:** None
 
 ## 1. Purpose
@@ -323,13 +326,10 @@ deferred implementation details.
 
 ## 17. Approval requirements and current state
 
-Formal `APPROVED` status requires all three approval roles:
-
-- Architecture;
-- Security; and
-- Data Owner.
-
-Each approval must record:
+Formal `APPROVED` status under the `SOLO_PROJECT_OWNER_APPROVAL` profile requires
+one explicit approval from the Project Owner / Accountable Human Owner for the
+exact current document version and fresh immutable review-content reference.
+The approval must record:
 
 - durable approver identity;
 - approval role;
@@ -337,35 +337,57 @@ Each approval must record:
 - exact approved document version; and
 - durable approval evidence or reference.
 
-Until all three approvals exist, SDS-115 remains `DRAFT` or `IN_REVIEW`, grants
-no implementation authority, and does not unlock
+Architecture, Security, and Data Owner may provide optional advisory reviews,
+but they are not mandatory formal document-approval gates for SDS-115.
+Document-owner self-approval is permitted for this solo-project profile.
+
+Until the required owner approval exists for the fresh review cycle, SDS-115
+remains `DRAFT` or `IN_REVIEW`, grants no implementation authority, and does
+not unlock
 `EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION`.
 
 ### 17.1 Approval record
 
-| Required role | Status | Durable Approver Identity | UTC Approval Timestamp | Approved Version | Approval Evidence / Reference |
+| Role | Status | Durable Approver Identity | UTC Approval Timestamp | Approved Version | Approval Evidence / Reference |
 |---|---|---|---|---|---|
-| Architecture | APPROVED / RECORDED | İlhan Çekiç | 2026-08-26T09:10:11.889Z | 0.1 Draft | `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab` |
-| Security | PENDING | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
-| Data Owner | PENDING | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
+| Project Owner / Accountable Human Owner | PENDING | İlhan Çekiç | NOT YET RECORDED | NOT YET RECORDED | NOT YET RECORDED |
+| Architecture advisory | HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE | İlhan Çekiç | 2026-08-26T09:10:11.889Z | 0.1 Draft | Original evidence preserved at `b159cf1b493fcf740a6b3380143ade0d2224d05d:docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md`, SHA-256 `5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab` |
+| Security advisory | OPTIONAL / NOT RECORDED | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE |
+| Data Owner advisory | OPTIONAL / NOT RECORDED | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE | NOT APPLICABLE |
 
 No row in this table implies approval.
 
-### 17.2 Recorded Architecture approval metadata
+### 17.2 Historical Architecture approval metadata
 
 - Approval role: Architecture.
+- Current status: `HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE`.
 - Durable human approver identity: İlhan Çekiç.
 - Decision: `APPROVE`.
 - UTC decision timestamp: `2026-08-26T09:10:11.889Z`.
 - Approved document version: `0.1 Draft`.
 - Reviewed normative content reference:
   `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
-- Durable approval evidence reference:
-  `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
-- Security approval remains `PENDING`.
-- Data Owner approval remains `PENDING`.
-- This Architecture approval grants no verification, implementation, or
-  migration 0006 authority.
+- Original durable approval evidence is preserved at commit
+  `b159cf1b493fcf740a6b3380143ade0d2224d05d`, path
+  `docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md`, SHA-256
+  `5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
+- The original decision is not erased or falsified. It does not approve the
+  normatively changed policy or the new review cycle.
+- This historical Architecture approval granted no runtime verification,
+  implementation, or migration 0006 authority.
+
+### 17.3 Solo-project document-approval governance
+
+- Required formal document approver: Project Owner / Accountable Human Owner.
+- Accountable human owner: İlhan Çekiç.
+- Owner role: Security/Governance Owner.
+- One explicit owner `APPROVE` decision is sufficient after a fresh immutable
+  review-content reference is established.
+- Document-owner self-approval is permitted for this solo-project profile.
+- AG-01 and AG-02 are superseded only for their three-distinct-human and
+  owner-overlap requirements governing SDS-115 document approval.
+- Runtime evidence-verification separation of duties and all runtime authority
+  controls remain unchanged.
 
 ## 18. Implementation unlock gate
 
@@ -373,10 +395,14 @@ No row in this table implies approval.
 
 1. the SDS-115 policy text is complete;
 2. an accountable durable human owner is assigned;
-3. Architecture approval is recorded;
-4. Security approval is recorded;
-5. Data Owner approval is recorded; and
-6. SDS-115 is formally transitioned to `APPROVED` under SDS-100 governance.
+3. a fresh immutable review-content reference is established after this
+   governance revision is committed;
+4. the owner has explicitly approved that exact document version and review
+   reference with a UTC timestamp and durable approval evidence;
+5. SDS-115 is formally transitioned to `APPROVED` under SDS-100 governance;
+   and
+6. a separate implementation-unlock gate check explicitly authorizes the next
+   implementation stage.
 
 Until every condition is satisfied:
 
@@ -386,9 +412,9 @@ MIGRATION_0006_ALLOWED = NO
 EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION = BLOCKED
 ```
 
-Assigning the accountable owner, transitioning to `IN_REVIEW`, recording the
-review reference, or changing the root-index file state does not satisfy the
-unlock gate or grant any approval.
+Committing this governance revision, assigning the accountable owner,
+transitioning to `IN_REVIEW`, recording the review reference, or approving the
+document does not by itself satisfy the separate implementation-unlock gate.
 
 ## 19. Explicit non-goals
 
@@ -443,17 +469,27 @@ not modify or supersede SDS-111, SDS-112, or SDS-114.
 | 11 | Audit every governed authorization denial: Section 13 |
 | 12 | No administrative or emergency bypass: Section 14 |
 | 13 | Scope-controlled evidence and explicit audit visibility: Section 16 |
-| 14 | Security/Governance ownership and three required approvals: Section 17 |
+| 14 | Security/Governance ownership and solo-project owner document approval: Section 17 |
 | 15 | SDS number, status, location, and approval governance: metadata, Sections 17–18, and SDS-100 |
+
+The Project Owner governance revision supersedes AG-01 and AG-02 only for
+SDS-115 document approval. It does not supersede or weaken the runtime
+separation rules represented in Sections 4–16.
 
 ## 22. Final policy state
 
 ```text
-FORMAL_STATUS = IN_REVIEW
+FORMAL_STATUS = DRAFT
 APPROVAL_STATE = PENDING
-ARCHITECTURE_APPROVAL = APPROVED / RECORDED
-SECURITY_APPROVAL = PENDING
-DATA_OWNER_APPROVAL = PENDING
+DOCUMENT_APPROVAL_MODEL = SOLO_PROJECT_OWNER_APPROVAL
+REQUIRED_FORMAL_DOCUMENT_APPROVER = PROJECT OWNER / ACCOUNTABLE HUMAN OWNER
+ACCOUNTABLE_HUMAN_OWNER = İLHAN ÇEKİÇ
+REQUIRED_OWNER_APPROVAL = PENDING
+PRIOR_ARCHITECTURE_APPROVAL = HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE
+ARCHITECTURE_ADVISORY_REVIEW = OPTIONAL
+SECURITY_ADVISORY_REVIEW = OPTIONAL
+DATA_OWNER_ADVISORY_REVIEW = OPTIONAL
+RUNTIME_SEPARATION_OF_DUTIES = PRESERVED
 IMPLEMENTATION_UNLOCKED = NO
 MIGRATION_0006_ALLOWED = NO
 EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION = BLOCKED

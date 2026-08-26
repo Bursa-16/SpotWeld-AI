@@ -76,6 +76,29 @@ The default required approval roles for this governed SDS series are
 Architecture, Security, and Data Owner. An exception requires an explicit,
 approved entry in this index; silence is not an exception.
 
+### 5.1 SDS-115 solo-project document-approval exception
+
+SDS-115 uses the `SOLO_PROJECT_OWNER_APPROVAL` document-governance profile:
+
+- Required formal document approver: Project Owner / Accountable Human Owner.
+- Accountable human owner: İlhan Çekiç.
+- Owner role: Security/Governance Owner.
+- One explicit owner `APPROVE` decision for the exact reviewed version and
+  immutable review-content reference is sufficient for formal SDS-115 document
+  approval.
+- Document-owner self-approval is permitted for this solo-project profile.
+- Architecture, Security, and Data Owner reviews are optional advisory reviews,
+  not mandatory formal document-approval gates for SDS-115.
+- AG-01 and AG-02 are superseded only where they required three distinct humans
+  or prohibited owner overlap for SDS-115 document approval.
+- This exception grants no runtime verification authority and does not weaken
+  runtime human-only verification, scoped delegation, deny-by-default behavior,
+  creator/submitter-versus-verifier separation, no-admin-bypass, append-only
+  decisions, auditability, or authority-snapshot requirements.
+- A normative SDS-115 governance change returns the document to `DRAFT`,
+  invalidates prior content-specific approvals for the new review cycle, and
+  requires a fresh immutable review-content reference before `IN_REVIEW`.
+
 ## 6. Supersession and retirement
 
 - Superseded and retired documents remain registered at their historical IDs
@@ -108,30 +131,36 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Architecture, Security, Data Owner | PENDING | None |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | DRAFT | FILE PRESENT / DRAFT | İlhan Çekiç (Security/Governance Owner) | Project Owner / Accountable Human Owner | PENDING | None |
 
 ### 7.1 SDS-115 review metadata
 
-- Version: `0.1 Draft` (unchanged by the `IN_REVIEW` transition).
+- Version: `0.1 Draft`.
+- Formal status: `DRAFT` because the document-approval governance changed.
+- Document-approval model: `SOLO_PROJECT_OWNER_APPROVAL`.
+- Required formal document approver: Project Owner / Accountable Human Owner.
 - Accountable human owner: İlhan Çekiç.
 - Owner role: Security/Governance Owner.
-- Reviewed normative content reference:
-  `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
-- The reviewed-content reference identifies the immutable normative policy
-  content; it is not the future metadata/status commit.
-- Architecture approval: `APPROVED / RECORDED`.
+- Fresh review-content reference: `PENDING` until the governance revision is
+  committed; the future reference must identify that exact committed policy.
+- Required owner approval: `PENDING`.
+- Document-owner self-approval: permitted for this solo-project profile after
+  the fresh review-content reference is established.
+- Prior Architecture approval status:
+  `HISTORICAL / SUPERSEDED — PRIOR REVIEW CYCLE`.
 - Architecture approver: İlhan Çekiç.
 - Architecture approval role: Architecture.
 - Architecture approval UTC timestamp: `2026-08-26T09:10:11.889Z`.
 - Architecture approved version: `0.1 Draft`.
-- Architecture reviewed normative content reference:
+- Prior Architecture reviewed normative content reference:
   `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
-- Architecture durable approval evidence reference:
-  `path=docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md;sha256=5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
-- Security approval: `PENDING`.
-- Data Owner approval: `PENDING`.
-- Owner assignment and the `IN_REVIEW` transition grant no approval.
-- The accountable owner may not serve as the Security approver.
+- Prior Architecture evidence is preserved at commit
+  `b159cf1b493fcf740a6b3380143ade0d2224d05d`, path
+  `docs/approvals/SDS_115_ARCHITECTURE_APPROVAL_0_1_DRAFT.md`, SHA-256
+  `5d9df8f6f249f4348d0ac79922e434055de81e3a90fc1735a6adc0114cec0cab`.
+- Architecture, Security, and Data Owner advisory reviews: optional and not
+  formal SDS-115 document-approval gates.
+- Runtime verification separation of duties: unchanged and mandatory.
 - `IMPLEMENTATION_UNLOCKED = NO`.
 - `MIGRATION_0006_ALLOWED = NO`.
 
@@ -145,8 +174,8 @@ change that approval state.
 - SDS-111 through SDS-114 are formally registered without changing their file
   contents or implying formal approval.
 - SDS-115 is registered for the Evidence Verification Authority Policy. Its
-  file is present in `IN_REVIEW` state. Owner assignment, file presence, and
-  the status transition do not approve that policy.
+  file is present in `DRAFT` state following a normative document-governance
+  revision. File presence and owner assignment do not approve that policy.
 - The legacy duplicate prefixes `00` through `30` remain outside the governed
   SDS namespace and do not affect this registry.
 
