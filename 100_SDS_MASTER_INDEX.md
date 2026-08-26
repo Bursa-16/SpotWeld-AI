@@ -108,7 +108,24 @@ change that approval state.
 | SDS-112 | Machine Readiness Check Design | `docs/112_MACHINE_READINESS_CHECK_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-113 | Digital Weld Passport Design | `docs/113_DIGITAL_WELD_PASSPORT_DESIGN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
 | SDS-114 | Registry + MRC + DWP Implementation Architecture Plan | `docs/114_REGISTRY_MRC_DWP_IMPLEMENTATION_PLAN.md` | DRAFT | EXISTING / FORMALLY REGISTERED | Assignment pending | Architecture, Security, Data Owner | PENDING | None |
-| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | DRAFT | FILE PRESENT / DRAFT | Security/Governance Owner — assignment pending | Architecture, Security, Data Owner | PENDING | None |
+| SDS-115 | Evidence Verification Authority Policy | `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md` | IN_REVIEW | FILE PRESENT / IN REVIEW | İlhan Çekiç (Security/Governance Owner) | Architecture, Security, Data Owner | PENDING | None |
+
+### 7.1 SDS-115 review metadata
+
+- Version: `0.1 Draft` (unchanged by the `IN_REVIEW` transition).
+- Accountable human owner: İlhan Çekiç.
+- Owner role: Security/Governance Owner.
+- Reviewed normative content reference:
+  `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`.
+- The reviewed-content reference identifies the immutable normative policy
+  content; it is not the future metadata/status commit.
+- Architecture approval: `PENDING`.
+- Security approval: `PENDING`.
+- Data Owner approval: `PENDING`.
+- Owner assignment and the `IN_REVIEW` transition grant no approval.
+- The accountable owner may not serve as the Security approver.
+- `IMPLEMENTATION_UNLOCKED = NO`.
+- `MIGRATION_0006_ALLOWED = NO`.
 
 ## 8. Reconciliation record
 
@@ -120,7 +137,8 @@ change that approval state.
 - SDS-111 through SDS-114 are formally registered without changing their file
   contents or implying formal approval.
 - SDS-115 is registered for the Evidence Verification Authority Policy. Its
-  file is present in DRAFT state, and file presence does not approve that policy.
+  file is present in `IN_REVIEW` state. Owner assignment, file presence, and
+  the status transition do not approve that policy.
 - The legacy duplicate prefixes `00` through `30` remain outside the governed
   SDS namespace and do not affect this registry.
 

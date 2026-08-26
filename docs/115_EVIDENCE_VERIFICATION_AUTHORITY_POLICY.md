@@ -3,11 +3,18 @@
 **Document ID:** SDS-115
 **Title:** Evidence Verification Authority Policy
 **Version:** 0.1 Draft
-**Formal Status:** DRAFT
+**Formal Status:** IN_REVIEW
 **Canonical Path:** `docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
-**Accountable Owner:** Security/Governance Owner — assignment pending
+**Accountable Human Owner:** İlhan Çekiç
+**Owner Role:** Security/Governance Owner
 **Required Approvals:** Architecture, Security, Data Owner
 **Approval State:** PENDING
+**Reviewed Normative Content Reference:** `24fd85b6f16e961bf165d65b46b7555c715a57fd:docs/115_EVIDENCE_VERIFICATION_AUTHORITY_POLICY.md`
+**Current Metadata/Status Commit:** Not recorded; this transition does not
+self-reference its future commit.
+**Owner Assignment Grants Approval:** NO
+**IN_REVIEW Transition Grants Approval:** NO
+**Owner May Serve as Security Approver:** NO
 **Supersedes:** None
 
 ## 1. Purpose
@@ -360,10 +367,12 @@ Until every condition is satisfied:
 ```text
 IMPLEMENTATION_UNLOCKED = NO
 MIGRATION_0006_ALLOWED = NO
+EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION = BLOCKED
 ```
 
-Creating this draft or changing its root-index file state does not satisfy the
-unlock gate.
+Assigning the accountable owner, transitioning to `IN_REVIEW`, recording the
+review reference, or changing the root-index file state does not satisfy the
+unlock gate or grant any approval.
 
 ## 19. Explicit non-goals
 
@@ -424,10 +433,11 @@ not modify or supersede SDS-111, SDS-112, or SDS-114.
 ## 22. Final policy state
 
 ```text
-FORMAL_STATUS = DRAFT
+FORMAL_STATUS = IN_REVIEW
 APPROVAL_STATE = PENDING
 IMPLEMENTATION_UNLOCKED = NO
 MIGRATION_0006_ALLOWED = NO
+EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION = BLOCKED
 SOURCE_BACKED_PROMOTION = DEFERRED
 RULE_ENABLEMENT = DEFERRED
 RULE_ACTIVATION = DEFERRED
