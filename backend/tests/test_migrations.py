@@ -5,9 +5,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import app.models  # noqa: F401
 import pytest
 from alembic import command
 from alembic.config import Config
+from app.db.session import Base
+from app.domain.governance_types import (
+    ContentVersionMetadata,
+    EvidenceClass,
+    RuleLifecycleStatus,
+)
+from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
+from app.models.rule_registry import EngineeringRuleRevision
+from app.repositories.rule_registry_repository import RuleRegistryRepository
 from sqlalchemy import (
     CheckConstraint,
     ForeignKeyConstraint,
@@ -21,16 +31,8 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-import app.models  # noqa: F401
-from app.db.session import Base
-from app.domain.governance_types import ContentVersionMetadata, EvidenceClass, RuleLifecycleStatus
-from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
-from app.models.rule_registry import EngineeringRuleRevision
-from app.repositories.rule_registry_repository import RuleRegistryRepository
-
-
 BACKEND_ROOT = Path(__file__).parents[1]
-REGISTRY_TABLES = {
+BASE_REGISTRY_TABLES = {
     "engineering_rules",
     "engineering_rule_revisions",
     "evidence_references",
@@ -38,6 +40,11 @@ REGISTRY_TABLES = {
     "governed_command_receipts",
     "rule_applicabilities",
 }
+VERIFICATION_TABLES = {
+    "evidence_verification_delegations",
+    "evidence_verification_decisions",
+}
+ALL_GOVERNED_TABLES = BASE_REGISTRY_TABLES | VERIFICATION_TABLES
 
 
 def _sqlite_url(database_path: Path) -> str:
@@ -75,10 +82,13 @@ def _sqlite_engine(database_url: str):
 
 
 @pytest.fixture()
+def database():
+    yield
+
+
+@pytest.fixture()
 def migration_database_dir():
-    temp_root = BACKEND_ROOT / ".pytest_cache"
-    temp_root.mkdir(exist_ok=True)
-    with TemporaryDirectory(prefix="registry-migration-", dir=temp_root) as path:
+    with TemporaryDirectory(prefix="registry-migration-") as path:
         yield Path(path)
 
 
@@ -111,9 +121,12 @@ def _foreign_keys_from_model(
     }
 
 
-def _assert_registry_schema_matches_models(database_engine) -> None:
+def _assert_registry_schema_matches_models(
+    database_engine,
+    table_names=BASE_REGISTRY_TABLES,
+) -> None:
     schema_inspector = inspect(database_engine)
-    for table_name in REGISTRY_TABLES:
+    for table_name in table_names:
         model_table = Base.metadata.tables[table_name]
         migrated_columns = {
             column["name"]: column
@@ -224,20 +237,20 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
 
     with _sqlite_engine(database_url) as migrated_engine:
         migrated_tables = set(inspect(migrated_engine).get_table_names())
-        assert REGISTRY_TABLES <= migrated_tables
+        assert ALL_GOVERNED_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0005_registry_evidence_applicability"
+                "0006_evidence_verification_authority_foundation"
             )
-            for table_name in REGISTRY_TABLES:
+            for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
-        _assert_registry_schema_matches_models(migrated_engine)
+        _assert_registry_schema_matches_models(migrated_engine, ALL_GOVERNED_TABLES)
 
     _run_downgrade(monkeypatch, database_url, "0002_auth_audit")
 
     with _sqlite_engine(database_url) as downgraded_engine:
         downgraded_tables = set(inspect(downgraded_engine).get_table_names())
-        assert REGISTRY_TABLES.isdisjoint(downgraded_tables)
+        assert ALL_GOVERNED_TABLES.isdisjoint(downgraded_tables)
         assert {"projects", "users", "audit_logs", "test_results"} <= downgraded_tables
         with downgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
@@ -246,9 +259,9 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
 
     _run_upgrade(monkeypatch, database_url, "head")
     with _sqlite_engine(database_url) as reupgraded_engine:
-        assert REGISTRY_TABLES <= set(inspect(reupgraded_engine).get_table_names())
+        assert ALL_GOVERNED_TABLES <= set(inspect(reupgraded_engine).get_table_names())
         with reupgraded_engine.connect() as connection:
-            for table_name in REGISTRY_TABLES:
+            for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
 
 
@@ -299,7 +312,7 @@ def test_sqlite_upgrade_from_previous_head_preserves_legacy_data(
 
     _run_upgrade(monkeypatch, database_url, "head")
 
-    with _sqlite_engine(database_url) as upgraded_engine:
+    with _sqlite_engine(database_url) as upgraded_engine:  # noqa: SIM117
         with upgraded_engine.connect() as connection:
             assert connection.scalar(
                 text(
@@ -307,7 +320,7 @@ def test_sqlite_upgrade_from_previous_head_preserves_legacy_data(
                     "WHERE project_code = 'MIGRATION-PRESERVATION'"
                 )
             ) == 1
-            for table_name in REGISTRY_TABLES:
+            for table_name in BASE_REGISTRY_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
 
     _run_downgrade(monkeypatch, database_url, "0002_auth_audit")
@@ -320,7 +333,7 @@ def test_sqlite_upgrade_from_previous_head_preserves_legacy_data(
                     "WHERE project_code = 'MIGRATION-PRESERVATION'"
                 )
             ) == 1
-        assert REGISTRY_TABLES.isdisjoint(
+        assert BASE_REGISTRY_TABLES.isdisjoint(
             inspect(downgraded_engine).get_table_names()
         )
 
@@ -357,7 +370,7 @@ def test_sqlite_migrated_constraints_reject_duplicate_and_cross_rule_history(
                 )
             duplicate_session.rollback()
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError):  # noqa: SIM117
             with migrated_engine.begin() as connection:
                 connection.execute(
                     update(EngineeringRuleRevision)
@@ -365,7 +378,7 @@ def test_sqlite_migrated_constraints_reject_duplicate_and_cross_rule_history(
                     .values(supersedes_revision_id=first_id)
                 )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError):  # noqa: SIM117
             with migrated_engine.begin() as connection:
                 connection.execute(
                     text(
@@ -375,7 +388,7 @@ def test_sqlite_migrated_constraints_reject_duplicate_and_cross_rule_history(
                     {"revision_id": first_id},
                 )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError):  # noqa: SIM117
             with migrated_engine.begin() as connection:
                 connection.execute(
                     text(
@@ -385,7 +398,7 @@ def test_sqlite_migrated_constraints_reject_duplicate_and_cross_rule_history(
                     {"revision_id": first_id},
                 )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError):  # noqa: SIM117
             with migrated_engine.begin() as connection:
                 connection.execute(
                     text(
@@ -484,7 +497,7 @@ def test_registry_evidence_applicability_migration_round_trip(
             column["name"] for column in inspector.get_columns("evidence_references")
         }
         assert {"revision_number", "supersedes_evidence_reference_id", "availability"} <= evidence_columns
-        _assert_registry_schema_matches_models(upgraded_engine)
+        _assert_registry_schema_matches_models(upgraded_engine, BASE_REGISTRY_TABLES)
 
     _run_downgrade(monkeypatch, database_url, "0004_persistent_idempotency")
     with _sqlite_engine(database_url) as downgraded_engine:
@@ -513,3 +526,35 @@ def test_registry_evidence_applicability_migration_has_no_seed_or_prototype_impo
     assert "bulk_insert" not in normalized
     assert "rules_engine" not in normalized
     assert "default_rules" not in normalized
+
+
+def test_verification_authority_migration_round_trip(
+    migration_database_dir,
+    monkeypatch,
+):
+    database_url = _sqlite_url(
+        migration_database_dir / "verification_authority_migration.db"
+    )
+    _run_upgrade(monkeypatch, database_url, "0005_registry_evidence_applicability")
+    with _sqlite_engine(database_url) as prior_engine:
+        assert VERIFICATION_TABLES.isdisjoint(inspect(prior_engine).get_table_names())
+
+    _run_upgrade(monkeypatch, database_url, "head")
+    with _sqlite_engine(database_url) as upgraded_engine:
+        upgraded_tables = set(inspect(upgraded_engine).get_table_names())
+        assert VERIFICATION_TABLES <= upgraded_tables
+        _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
+        with upgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0006_evidence_verification_authority_foundation"
+            )
+
+    _run_downgrade(monkeypatch, database_url, "0005_registry_evidence_applicability")
+    with _sqlite_engine(database_url) as downgraded_engine:
+        assert VERIFICATION_TABLES.isdisjoint(
+            inspect(downgraded_engine).get_table_names()
+        )
+        with downgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0005_registry_evidence_applicability"
+            )
