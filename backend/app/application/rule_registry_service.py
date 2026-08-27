@@ -29,7 +29,12 @@ from app.domain.rule_registry_types import (
     SafeDefault,
 )
 from app.domain.verification_types import VerificationDecisionOutcome
-from app.models.rule_registry import EngineeringRule, EngineeringRuleRevision
+from app.models.entities import User
+from app.models.rule_registry import (
+    EngineeringRule,
+    EngineeringRuleRevision,
+    RuleLifecycleEventType,
+)
 from app.models.verification import EvidenceVerificationDecision
 from app.repositories.rule_registry_repository import RuleRegistryRepository
 
@@ -63,6 +68,8 @@ class RuleRegistryService:
     """Coordinate non-authoritative Registry drafts and governed audit."""
 
     COMMAND_NAMESPACE = "registry.rule.source_backed_promotion"
+    ENABLEMENT_COMMAND_NAMESPACE = "registry.rule.enablement"
+    ACTIVATION_COMMAND_NAMESPACE = "registry.rule.activation"
 
     def __init__(self, unit_of_work: GovernedUnitOfWork):
         self._unit_of_work = unit_of_work
@@ -119,6 +126,7 @@ class RuleRegistryService:
         description: str | None = None,
         note: str | None = None,
         enabled: bool = False,
+        allow_source_backed: bool = False,
     ) -> EngineeringRuleRevision:
         """Create a DRAFT revision; repository authority guards remain final."""
         self._unit_of_work.ensure_open()
@@ -146,6 +154,7 @@ class RuleRegistryService:
             applicability_schema_version=applicability_schema_version,
             description=description,
             note=note,
+            allow_source_backed=allow_source_backed,
         )
         self._audit.record_event(
             **self._common_audit_fields(audit),
@@ -522,6 +531,64 @@ class RuleRegistryService:
             raise RuntimeError("source-backed promotion idempotency completion failed")
         return result
 
+    def enable_source_backed(
+        self,
+        *,
+        rule_id: str,
+        source_revision: str,
+        receipt_id: str,
+        command_identity: CommandIdentity,
+        request_hash: CanonicalRequestHash,
+        audit: GovernedAuditMetadata,
+        effective_from: datetime,
+        expires_at: datetime | None,
+        completed_at: datetime,
+    ) -> CommandResultReference:
+        return self._governed_source_backed_lifecycle_transition(
+            rule_id=rule_id,
+            source_revision=source_revision,
+            receipt_id=receipt_id,
+            command_identity=command_identity,
+            request_hash=request_hash,
+            audit=audit,
+            effective_from=effective_from,
+            expires_at=expires_at,
+            completed_at=completed_at,
+            command_namespace=self.ENABLEMENT_COMMAND_NAMESPACE,
+            event_type=RuleLifecycleEventType.ENABLE,
+            audit_action="ENABLE_SOURCE_BACKED_RULE_REVISION",
+            denial_action="AUTHORIZE_SOURCE_BACKED_ENABLEMENT_DENIED",
+        )
+
+    def activate_source_backed(
+        self,
+        *,
+        rule_id: str,
+        source_revision: str,
+        receipt_id: str,
+        command_identity: CommandIdentity,
+        request_hash: CanonicalRequestHash,
+        audit: GovernedAuditMetadata,
+        effective_from: datetime,
+        expires_at: datetime | None,
+        completed_at: datetime,
+    ) -> CommandResultReference:
+        return self._governed_source_backed_lifecycle_transition(
+            rule_id=rule_id,
+            source_revision=source_revision,
+            receipt_id=receipt_id,
+            command_identity=command_identity,
+            request_hash=request_hash,
+            audit=audit,
+            effective_from=effective_from,
+            expires_at=expires_at,
+            completed_at=completed_at,
+            command_namespace=self.ACTIVATION_COMMAND_NAMESPACE,
+            event_type=RuleLifecycleEventType.ACTIVATE,
+            audit_action="ACTIVATE_SOURCE_BACKED_RULE_REVISION",
+            denial_action="AUTHORIZE_SOURCE_BACKED_ACTIVATION_DENIED",
+        )
+
     @staticmethod
     def _common_audit_fields(audit: GovernedAuditMetadata) -> dict[str, object]:
         return {
@@ -554,6 +621,470 @@ class RuleRegistryService:
     def _hash(value: object) -> str:
         payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _governed_source_backed_lifecycle_transition(
+        self,
+        *,
+        rule_id: str,
+        source_revision: str,
+        receipt_id: str,
+        command_identity: CommandIdentity,
+        request_hash: CanonicalRequestHash,
+        audit: GovernedAuditMetadata,
+        effective_from: datetime,
+        expires_at: datetime | None,
+        completed_at: datetime,
+        command_namespace: str,
+        event_type: RuleLifecycleEventType,
+        audit_action: str,
+        denial_action: str,
+    ) -> CommandResultReference:
+        self._unit_of_work.ensure_open()
+        if command_identity.command_namespace != command_namespace:
+            raise ValueError("source-backed lifecycle command namespace mismatch")
+        if command_identity.command_scope != rule_id:
+            raise ValueError("source-backed lifecycle command scope must match rule_id")
+        decision = self._idempotency.reserve_or_inspect(
+            receipt_id=receipt_id,
+            identity=command_identity,
+            request_hash=request_hash,
+            correlation_id=audit.correlation_id,
+            schema_version=audit.schema_version,
+            software_version=audit.software_version,
+            created_at=audit.created_at,
+        )
+        if decision.disposition is IdempotencyDisposition.REPLAY:
+            if decision.result_reference is None:
+                raise RuntimeError("completed lifecycle replay has no durable result")
+            return decision.result_reference
+        if decision.disposition is IdempotencyDisposition.CONFLICT:
+            raise ValueError("idempotency conflict for source-backed lifecycle command")
+        if decision.disposition is IdempotencyDisposition.IN_PROGRESS:
+            raise RuntimeError("source-backed lifecycle command is already in progress")
+        actor = self._repository.session.get(User, audit.actor_user_id) if audit.actor_user_id is not None else None
+        if audit.actor_type != "user" or actor is None or not actor.is_active:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="NON_HUMAN_OR_INACTIVE_ACTOR",
+                denial_reason="source-backed lifecycle requires an active durable human user",
+            )
+
+        rule = self._repository.get_by_rule_id(rule_id)
+        if rule is None:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="MISSING_RULE_IDENTITY",
+                denial_reason="engineering rule identity does not exist",
+            )
+
+        source = self._repository.get_revision(rule_id, source_revision)
+        if source is None:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="MISSING_SOURCE_REVISION",
+                denial_reason="source-backed revision does not exist",
+            )
+        if source.status is not RuleLifecycleStatus.DRAFT:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="SOURCE_REVISION_NOT_DRAFT",
+                denial_reason="only a DRAFT revision can be enabled or activated",
+            )
+        if source.evidence_class is not EvidenceClass.SOURCE_BACKED:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="SOURCE_REVISION_NOT_SOURCE_BACKED",
+                denial_reason="lifecycle transition requires a SOURCE_BACKED revision",
+            )
+        if source.created_by_user_id is None:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="MISSING_SOURCE_SUBMITTER",
+                denial_reason="source-backed revision lacks durable human submitter identity",
+            )
+        if source.created_by_user_id == actor.id:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="SEPARATION_OF_DUTIES_VIOLATION",
+                denial_reason="source submitter must not perform the lifecycle transition",
+            )
+
+        scope_snapshot = dict(audit.authority_scope) if audit.authority_scope is not None else None
+        if scope_snapshot is None or not any(value is not None for value in scope_snapshot.values()):
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="MISSING_SCOPE_SNAPSHOT",
+                denial_reason="source-backed lifecycle requires an explicit non-empty scope snapshot",
+            )
+
+        basis = self._resolve_source_backed_basis(
+            rule_id=rule_id,
+            source=source,
+            scope_snapshot=scope_snapshot,
+            actor_user_id=actor.id,
+            audit=audit,
+            completed_at=completed_at,
+            command_identity=command_identity,
+            request_hash=request_hash,
+            denial_action=denial_action,
+        )
+        if basis is None:
+            return self._deny_source_backed_lifecycle(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                audit=audit,
+                completed_at=completed_at,
+                command_identity=command_identity,
+                request_hash=request_hash,
+                denial_action=denial_action,
+                denial_code="UNRESOLVED_BASIS",
+                denial_reason="source-backed lifecycle basis could not be resolved",
+            )
+        basis_snapshot, _verified_decisions = basis
+
+        latest_lifecycle_event = self._repository.get_latest_lifecycle_event(
+            engineering_rule_revision_id=source.id,
+            scope_snapshot=scope_snapshot,
+            event_types=(
+                RuleLifecycleEventType.ENABLE,
+                RuleLifecycleEventType.ACTIVATE,
+            ),
+        )
+        if event_type is RuleLifecycleEventType.ENABLE:
+            if latest_lifecycle_event is not None:
+                return self._deny_source_backed_lifecycle(
+                    rule_id=rule_id,
+                    source_revision=source_revision,
+                    audit=audit,
+                    completed_at=completed_at,
+                    command_identity=command_identity,
+                    request_hash=request_hash,
+                    denial_action=denial_action,
+                    denial_code="ALREADY_ENABLED_OR_ACTIVE",
+                    denial_reason="source-backed revision already has an enablement or activation event for this scope",
+                )
+        else:
+            if latest_lifecycle_event is None:
+                return self._deny_source_backed_lifecycle(
+                    rule_id=rule_id,
+                    source_revision=source_revision,
+                    audit=audit,
+                    completed_at=completed_at,
+                    command_identity=command_identity,
+                    request_hash=request_hash,
+                    denial_action=denial_action,
+                    denial_code="MISSING_ENABLEMENT",
+                    denial_reason="activation requires an existing enablement event for the exact revision and scope",
+                )
+            if latest_lifecycle_event.event_type is RuleLifecycleEventType.ACTIVATE:
+                return self._deny_source_backed_lifecycle(
+                    rule_id=rule_id,
+                    source_revision=source_revision,
+                    audit=audit,
+                    completed_at=completed_at,
+                    command_identity=command_identity,
+                    request_hash=request_hash,
+                    denial_action=denial_action,
+                    denial_code="ALREADY_ACTIVE",
+                    denial_reason="source-backed revision is already active for this scope",
+                )
+            enabled_basis = latest_lifecycle_event.basis_snapshot
+            if enabled_basis.get("content_hash") != basis_snapshot["content_hash"]:
+                return self._deny_source_backed_lifecycle(
+                    rule_id=rule_id,
+                    source_revision=source_revision,
+                    audit=audit,
+                    completed_at=completed_at,
+                    command_identity=command_identity,
+                    request_hash=request_hash,
+                    denial_action=denial_action,
+                    denial_code="BASIS_INVALIDATED",
+                    denial_reason="source-backed enablement basis was superseded or corrected",
+                )
+
+        lifecycle_event_id = self._lifecycle_event_identity(
+            rule_id=rule_id,
+            source_revision=source,
+            event_type=event_type,
+            scope_snapshot=scope_snapshot,
+        )
+        authority_snapshot = self._lifecycle_authority_snapshot(
+            audit=audit,
+            event_type=event_type,
+            scope_snapshot=scope_snapshot,
+            effective_from=effective_from,
+            expires_at=expires_at,
+            completed_at=completed_at,
+        )
+        transition_content_hash = self._hash(
+            {
+                "lifecycle_event_id": lifecycle_event_id,
+                "event_type": event_type.value,
+                "rule_id": rule_id,
+                "source_revision_id": source.id,
+                "source_revision": source.revision,
+                "scope_snapshot": scope_snapshot,
+                "basis_content_hash": basis_snapshot["content_hash"],
+                "authority_snapshot": authority_snapshot,
+                "effective_from": effective_from,
+                "expires_at": expires_at,
+            }
+        )
+        lifecycle_event = self._repository.create_lifecycle_event(
+            engineering_rule=rule,
+            engineering_rule_revision=source,
+            lifecycle_event_id=lifecycle_event_id,
+            revision_number=1,
+            event_type=event_type,
+            scope_snapshot=scope_snapshot,
+            basis_snapshot=basis_snapshot,
+            authority_snapshot=authority_snapshot,
+            effective_from=effective_from,
+            expires_at=expires_at,
+            created_by_actor_id=audit.actor_id,
+            created_by_user_id=audit.actor_user_id,
+            schema_version="rule-lifecycle-v1",
+            canonicalization_version="rule-lifecycle-canonical-v1",
+            hash_algorithm="sha256",
+            content_hash=transition_content_hash,
+            software_version=audit.software_version,
+            correlation_id=audit.correlation_id,
+        )
+        self._audit.record_event(
+            **self._common_audit_fields(audit),
+            entity_type="engineering_rule_lifecycle_event",
+            entity_id=rule_id,
+            entity_revision=source.revision,
+            action=audit_action,
+            prior_content_hash=source.content_hash,
+            new_content_hash=lifecycle_event.content_hash,
+            detail=self._audit_detail(
+                audit,
+                command=audit_action,
+                rule_id=rule_id,
+                source_revision=source.revision,
+                source_revision_id=source.id,
+                lifecycle_event_id=lifecycle_event.lifecycle_event_id,
+                event_type=event_type.value,
+                scope_snapshot=scope_snapshot,
+                basis_content_hash=basis_snapshot["content_hash"],
+                basis_revision_ids=[
+                    pin["evidence_reference_id"] for pin in basis_snapshot["evidence_pins"]
+                ],
+                verification_decision_ids=[
+                    pin["verification_decision_id"] for pin in basis_snapshot["evidence_pins"]
+                ],
+            ),
+        )
+        result = CommandResultReference(
+            result_type="engineering_rule_lifecycle_event",
+            result_id=str(lifecycle_event.id),
+            result_revision=str(lifecycle_event.revision_number),
+        )
+        completed = self._idempotency.complete(
+            identity=command_identity,
+            request_hash=request_hash,
+            result_reference=result,
+            completed_at=completed_at,
+        )
+        if completed.result_reference != result:
+            raise RuntimeError("source-backed lifecycle idempotency completion failed")
+        return result
+
+    def _resolve_source_backed_basis(
+        self,
+        *,
+        rule_id: str,
+        source: EngineeringRuleRevision,
+        scope_snapshot: dict[str, object],
+        actor_user_id: int,
+        audit: GovernedAuditMetadata,
+        completed_at: datetime,
+        command_identity: CommandIdentity,
+        request_hash: CanonicalRequestHash,
+        denial_action: str,
+    ) -> tuple[dict[str, object], list[tuple[EvidenceReferenceDraft, EvidenceVerificationDecision]]] | None:
+        if any(candidate.supersedes_revision_id == source.id for candidate in self._repository.list_revisions(rule_id)):
+            return None
+
+        source_evidence_references = list(source.evidence_references)
+        if not source_evidence_references:
+            return None
+
+        verified_decisions: list[
+            tuple[EvidenceReferenceDraft, EvidenceVerificationDecision]
+        ] = []
+        for evidence_reference in sorted(
+            source_evidence_references,
+            key=lambda reference: (reference.evidence_id, reference.evidence_revision, reference.id),
+        ):
+            verified_decision = self._repository.get_latest_verified_evidence_decision(
+                evidence_reference_id=evidence_reference.id
+            )
+            if verified_decision is None:
+                return None
+            if verified_decision.decision_outcome is not VerificationDecisionOutcome.VERIFIED:
+                return None
+            if verified_decision.verifier_user_id == actor_user_id:
+                return None
+            verified_scope = verified_decision.authority_snapshot.get("resource_scope")
+            if verified_scope != scope_snapshot:
+                return None
+            verified_decisions.append((evidence_reference, verified_decision))
+
+        basis_snapshot = {
+            "rule_id": rule_id,
+            "source_revision_id": source.id,
+            "source_revision": source.revision,
+            "source_content_hash": source.content_hash,
+            "scope_snapshot": scope_snapshot,
+            "evidence_pins": [
+                {
+                    "evidence_reference_id": evidence_reference.id,
+                    "evidence_id": evidence_reference.evidence_id,
+                    "evidence_revision": evidence_reference.evidence_revision,
+                    "verification_decision_id": verified_decision.id,
+                    "verification_revision_number": verified_decision.revision_number,
+                    "verification_decision_content_hash": verified_decision.content_hash,
+                    "verification_authority_snapshot_hash": verified_decision.authority_snapshot_content_hash,
+                    "verifier_user_id": verified_decision.verifier_user_id,
+                }
+                for evidence_reference, verified_decision in verified_decisions
+            ],
+        }
+        basis_snapshot["content_hash"] = self._hash(basis_snapshot)
+        return basis_snapshot, verified_decisions
+
+    @staticmethod
+    def _lifecycle_event_identity(
+        *,
+        rule_id: str,
+        source_revision: EngineeringRuleRevision,
+        event_type: RuleLifecycleEventType,
+        scope_snapshot: dict[str, object],
+    ) -> str:
+        scope_hash = hashlib.sha256(
+            json.dumps(scope_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        return f"{rule_id}:{source_revision.revision}:{event_type.value}:{scope_hash}"
+
+    @staticmethod
+    def _lifecycle_authority_snapshot(
+        *,
+        audit: GovernedAuditMetadata,
+        event_type: RuleLifecycleEventType,
+        scope_snapshot: dict[str, object],
+        effective_from: datetime,
+        expires_at: datetime | None,
+        completed_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "actor_id": audit.actor_id,
+            "actor_user_id": audit.actor_user_id,
+            "actor_role": audit.actor_role,
+            "actor_type": audit.actor_type,
+            "lifecycle_capability": event_type.value,
+            "scope_snapshot": scope_snapshot,
+            "effective_from": effective_from.isoformat(),
+            "expires_at": expires_at.isoformat() if expires_at is not None else None,
+            "decision_at": completed_at.isoformat(),
+            "correlation_id": audit.correlation_id,
+            "policy_identifier": "SDS-115",
+            "policy_version": "0.1 Draft",
+        }
+
+    def _deny_source_backed_lifecycle(
+        self,
+        *,
+        rule_id: str,
+        source_revision: str,
+        audit: GovernedAuditMetadata,
+        completed_at: datetime,
+        command_identity: CommandIdentity,
+        request_hash: CanonicalRequestHash,
+        denial_action: str,
+        denial_code: str,
+        denial_reason: str,
+    ) -> CommandResultReference:
+        denial_event = self._audit.record_event(
+            **self._common_audit_fields(audit),
+            entity_type="engineering_rule_lifecycle_denial",
+            entity_id=rule_id,
+            entity_revision=source_revision,
+            action=denial_action,
+            prior_content_hash=None,
+            new_content_hash=None,
+            detail=self._audit_detail(
+                audit,
+                command=denial_action,
+                rule_id=rule_id,
+                source_revision=source_revision,
+                denial_code=denial_code,
+                denial_reason=denial_reason,
+            ),
+        )
+        result = CommandResultReference(
+            result_type="engineering_rule_lifecycle_denial",
+            result_id=str(denial_event.id),
+            result_revision="denied",
+        )
+        completed = self._idempotency.complete(
+            identity=command_identity,
+            request_hash=request_hash,
+            result_reference=result,
+            completed_at=completed_at,
+        )
+        if completed.result_reference != result:
+            raise RuntimeError("source-backed lifecycle denial idempotency completion failed")
+        return result
 
     def _deny_source_backed_promotion(
         self,

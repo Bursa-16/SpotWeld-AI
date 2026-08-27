@@ -8,10 +8,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.exc import IntegrityError, StatementError
-from sqlalchemy.orm import Session
-
 from app.db.session import Base
 from app.domain.governance_types import (
     ContentVersionMetadata,
@@ -27,8 +23,15 @@ from app.domain.rule_registry_types import (
     SafeDefault,
 )
 from app.models.governance import GovernedAuditEvent
-from app.models.rule_registry import EngineeringRuleRevision, EvidenceReference
+from app.models.rule_registry import (
+    EngineeringRuleRevision,
+    EvidenceReference,
+    RuleLifecycleEventType,
+)
 from app.repositories.rule_registry_repository import RuleRegistryRepository
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError, StatementError
+from sqlalchemy.orm import Session
 
 
 @pytest.fixture()
@@ -442,6 +445,138 @@ def test_repository_allows_explicit_source_backed_revision_creation(
     assert persisted.supersedes_revision_id == source_revision.id
     assert len(persisted.evidence_references) == 1
     assert persisted.evidence_references[0].evidence_id == "TEST_SOURCE_BACKED_EVIDENCE"
+
+
+def test_repository_records_rule_lifecycle_events_with_exact_scope_and_history(
+    registry_session,
+):
+    repository = RuleRegistryRepository(registry_session)
+    rule = repository.create_rule(
+        rule_id="TEST_RULE_LIFECYCLE",
+        created_by_actor_id="test-actor",
+    )
+    source_revision = repository.create_revision(
+        engineering_rule=rule,
+        revision="1.0",
+        name="Synthetic lifecycle source-backed revision",
+        status=RuleLifecycleStatus.DRAFT,
+        evidence_class=EvidenceClass.SOURCE_BACKED,
+        category=RuleCategory.OTHER,
+        parameter="synthetic_parameter",
+        operator=None,
+        min_value=None,
+        max_value=None,
+        unit=None,
+        applicability_metadata=None,
+        applicability_schema_version=None,
+        effective_date=None,
+        expiry_date=None,
+        supersedes_revision_id=None,
+        source_type=None,
+        source_name=None,
+        source_document=None,
+        source_url=None,
+        safe_default=SafeDefault.UNRESOLVED,
+        missing_handling=MissingHandling.DATA_INSUFFICIENT,
+        conflict_handling="REQUIRE_ENGINEERING_REVIEW",
+        unit_mismatch_handling=None,
+        description=None,
+        note=None,
+        enabled=False,
+        reason_for_change="Synthetic lifecycle source-backed revision",
+        version_metadata=_version_metadata(rule.rule_id, "1.0"),
+        created_by_actor_id="test-actor",
+        allow_source_backed=True,
+    )
+    scope_snapshot = {"project": "synthetic-project"}
+    basis_snapshot = {
+        "rule_id": rule.rule_id,
+        "source_revision_id": source_revision.id,
+        "source_revision": source_revision.revision,
+        "source_content_hash": source_revision.content_hash,
+        "scope_snapshot": scope_snapshot,
+        "evidence_pins": [],
+        "content_hash": "basis-hash-1",
+    }
+    authority_snapshot = {
+        "actor_id": "lifecycle-actor",
+        "actor_user_id": 7,
+        "actor_role": "Approver",
+        "actor_type": "user",
+        "lifecycle_capability": "ENABLE",
+        "scope_snapshot": scope_snapshot,
+        "effective_from": datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc).isoformat(),
+        "expires_at": None,
+        "decision_at": datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc).isoformat(),
+        "correlation_id": "lifecycle-correlation",
+        "policy_identifier": "SDS-115",
+        "policy_version": "0.1 Draft",
+    }
+
+    enablement = repository.create_lifecycle_event(
+        engineering_rule=rule,
+        engineering_rule_revision=source_revision,
+        lifecycle_event_id="TEST_RULE_LIFECYCLE:1.0:ENABLE:scope",
+        revision_number=1,
+        event_type=RuleLifecycleEventType.ENABLE,
+        scope_snapshot=scope_snapshot,
+        basis_snapshot=basis_snapshot,
+        authority_snapshot=authority_snapshot,
+        effective_from=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+        expires_at=None,
+        created_by_actor_id="lifecycle-actor",
+        created_by_user_id=None,
+        schema_version="rule-lifecycle-v1",
+        canonicalization_version="rule-lifecycle-canonical-v1",
+        hash_algorithm="sha256",
+        content_hash="lifecycle-hash-1",
+        software_version="test-build",
+        correlation_id="lifecycle-correlation",
+    )
+    correction = repository.create_lifecycle_event(
+        engineering_rule=rule,
+        engineering_rule_revision=source_revision,
+        lifecycle_event_id="TEST_RULE_LIFECYCLE:1.0:ENABLE:scope",
+        revision_number=2,
+        event_type=RuleLifecycleEventType.CORRECT,
+        scope_snapshot=scope_snapshot,
+        basis_snapshot={**basis_snapshot, "content_hash": "basis-hash-2"},
+        authority_snapshot={**authority_snapshot, "lifecycle_capability": "CORRECT"},
+        effective_from=datetime(2031, 2, 3, 4, 5, 7, tzinfo=timezone.utc),
+        expires_at=None,
+        created_by_actor_id="lifecycle-actor",
+        created_by_user_id=None,
+        schema_version="rule-lifecycle-v1",
+        canonicalization_version="rule-lifecycle-canonical-v1",
+        hash_algorithm="sha256",
+        content_hash="lifecycle-hash-2",
+        software_version="test-build",
+        correlation_id="lifecycle-correlation",
+        supersedes_rule_lifecycle_event_id=enablement.id,
+    )
+    registry_session.commit()
+    registry_session.expire_all()
+
+    latest = repository.get_latest_lifecycle_event(
+        engineering_rule_revision_id=source_revision.id,
+        scope_snapshot=scope_snapshot,
+        event_types=(RuleLifecycleEventType.ENABLE, RuleLifecycleEventType.CORRECT),
+    )
+    assert latest is not None
+    assert latest.id == correction.id
+    assert latest.scope_snapshot == scope_snapshot
+    assert latest.basis_snapshot["content_hash"] == "basis-hash-2"
+    assert repository.get_latest_lifecycle_event(
+        engineering_rule_revision_id=source_revision.id,
+        scope_snapshot={"project": "other"},
+        event_types=(RuleLifecycleEventType.ENABLE, RuleLifecycleEventType.CORRECT),
+    ) is None
+    history = repository.list_lifecycle_history(
+        "TEST_RULE_LIFECYCLE:1.0:ENABLE:scope"
+    )
+    assert [event.revision_number for event in history] == [1, 2]
+    assert history[0].event_type is RuleLifecycleEventType.ENABLE
+    assert history[1].event_type is RuleLifecycleEventType.CORRECT
 
 
 @pytest.mark.parametrize(

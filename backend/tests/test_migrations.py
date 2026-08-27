@@ -40,11 +40,14 @@ BASE_REGISTRY_TABLES = {
     "governed_command_receipts",
     "rule_applicabilities",
 }
+LIFECYCLE_TABLES = {
+    "rule_lifecycle_events",
+}
 VERIFICATION_TABLES = {
     "evidence_verification_delegations",
     "evidence_verification_decisions",
 }
-ALL_GOVERNED_TABLES = BASE_REGISTRY_TABLES | VERIFICATION_TABLES
+ALL_GOVERNED_TABLES = BASE_REGISTRY_TABLES | LIFECYCLE_TABLES | VERIFICATION_TABLES
 
 
 def _sqlite_url(database_path: Path) -> str:
@@ -240,7 +243,7 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert ALL_GOVERNED_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0006_evidence_verification_authority_foundation"
+                "0007_rule_lifecycle_events"
             )
             for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
@@ -546,7 +549,7 @@ def test_verification_authority_migration_round_trip(
         _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
         with upgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0006_evidence_verification_authority_foundation"
+                "0007_rule_lifecycle_events"
             )
 
     _run_downgrade(monkeypatch, database_url, "0005_registry_evidence_applicability")

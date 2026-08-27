@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
@@ -181,6 +182,17 @@ class EngineeringRuleRevision(Base):
     )
 
 
+class RuleLifecycleEventType(StrEnum):
+    ENABLE = "ENABLE"
+    ACTIVATE = "ACTIVATE"
+    SUSPEND = "SUSPEND"
+    REVOKE = "REVOKE"
+    DEPRECATE = "DEPRECATE"
+    SUPERSEDE = "SUPERSEDE"
+    EXPIRE = "EXPIRE"
+    CORRECT = "CORRECT"
+
+
 class EvidenceReference(Base):
     __tablename__ = "evidence_references"
     __table_args__ = (
@@ -297,6 +309,96 @@ class EvidenceReference(Base):
     engineering_rule_revision: Mapped[EngineeringRuleRevision] = relationship(
         foreign_keys=[engineering_rule_revision_id]
     )
+
+
+class RuleLifecycleEvent(Base):
+    __tablename__ = "rule_lifecycle_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "lifecycle_event_id",
+            "revision_number",
+            name="uq_rule_lifecycle_events_logical_revision",
+        ),
+        UniqueConstraint(
+            "lifecycle_event_id",
+            "id",
+            name="uq_rule_lifecycle_events_context_internal_id",
+        ),
+        UniqueConstraint(
+            "supersedes_rule_lifecycle_event_id",
+            name="uq_rule_lifecycle_events_single_successor",
+        ),
+        ForeignKeyConstraint(
+            ["engineering_rule_id", "engineering_rule_revision_id"],
+            [
+                "engineering_rule_revisions.engineering_rule_id",
+                "engineering_rule_revisions.id",
+            ],
+            name="fk_rule_lifecycle_events_exact_rule_revision",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["lifecycle_event_id", "supersedes_rule_lifecycle_event_id"],
+            [
+                "rule_lifecycle_events.lifecycle_event_id",
+                "rule_lifecycle_events.id",
+            ],
+            name="fk_rule_lifecycle_events_same_event_supersession",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "revision_number > 0",
+            name="ck_rule_lifecycle_events_positive_revision_number",
+        ),
+        CheckConstraint(
+            "supersedes_rule_lifecycle_event_id IS NULL "
+            "OR supersedes_rule_lifecycle_event_id != id",
+            name="ck_rule_lifecycle_events_not_self_superseding",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > effective_from",
+            name="ck_rule_lifecycle_events_effective_window",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lifecycle_event_id: Mapped[str] = mapped_column(String(120))
+    revision_number: Mapped[int] = mapped_column(Integer)
+    engineering_rule_id: Mapped[int] = mapped_column(
+        ForeignKey("engineering_rules.id", ondelete="RESTRICT"), index=True
+    )
+    engineering_rule_revision_id: Mapped[int] = mapped_column(
+        ForeignKey("engineering_rule_revisions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    event_type: Mapped[RuleLifecycleEventType] = mapped_column(
+        portable_enum(
+            RuleLifecycleEventType,
+            "ck_rule_lifecycle_events_event_type",
+        ),
+        index=True,
+    )
+    scope_snapshot: Mapped[dict] = mapped_column(ImmutableJSON)
+    basis_snapshot: Mapped[dict] = mapped_column(ImmutableJSON)
+    authority_snapshot: Mapped[dict] = mapped_column(ImmutableJSON)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    supersedes_rule_lifecycle_event_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_by_actor_id: Mapped[str] = mapped_column(String(200))
+    schema_version: Mapped[str] = mapped_column(String(40))
+    canonicalization_version: Mapped[str] = mapped_column(String(40))
+    hash_algorithm: Mapped[str] = mapped_column(String(40))
+    content_hash: Mapped[str] = mapped_column(String(128))
+    software_version: Mapped[str] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class RuleApplicability(Base):
@@ -431,6 +533,9 @@ def _guard_phase1_evidence_insert(_mapper, _connection, target) -> None:
 freeze_json_attribute(EngineeringRuleRevision.applicability_metadata)
 freeze_json_attribute(EvidenceReference.reference_metadata)
 freeze_json_attribute(RuleApplicability.allowed_values)
+freeze_json_attribute(RuleLifecycleEvent.scope_snapshot)
+freeze_json_attribute(RuleLifecycleEvent.basis_snapshot)
+freeze_json_attribute(RuleLifecycleEvent.authority_snapshot)
 event.listen(
     EngineeringRuleRevision,
     "before_insert",
@@ -441,3 +546,4 @@ protect_immutable_model(EngineeringRule)
 protect_immutable_model(EngineeringRuleRevision)
 protect_immutable_model(EvidenceReference)
 protect_immutable_model(RuleApplicability)
+protect_immutable_model(RuleLifecycleEvent)

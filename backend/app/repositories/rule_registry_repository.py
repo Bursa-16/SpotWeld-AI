@@ -25,6 +25,8 @@ from app.models.rule_registry import (
     EngineeringRule,
     EngineeringRuleRevision,
     EvidenceReference,
+    RuleLifecycleEvent,
+    RuleLifecycleEventType,
 )
 from app.models.verification import EvidenceVerificationDecision
 
@@ -213,6 +215,140 @@ class RuleRegistryRepository:
             )
         )
         return self.session.scalar(statement)
+
+    def list_lifecycle_history(
+        self,
+        lifecycle_event_id: str,
+    ) -> list[RuleLifecycleEvent]:
+        statement = (
+            select(RuleLifecycleEvent)
+            .where(RuleLifecycleEvent.lifecycle_event_id == lifecycle_event_id)
+            .order_by(
+                RuleLifecycleEvent.revision_number,
+                RuleLifecycleEvent.id,
+            )
+        )
+        return list(self.session.scalars(statement))
+
+    def get_latest_lifecycle_event(
+        self,
+        *,
+        engineering_rule_revision_id: int,
+        scope_snapshot: dict[str, object],
+        event_types: Sequence[RuleLifecycleEventType] | None = None,
+    ) -> RuleLifecycleEvent | None:
+        statement = (
+            select(RuleLifecycleEvent)
+            .where(
+                RuleLifecycleEvent.engineering_rule_revision_id
+                == engineering_rule_revision_id
+            )
+            .order_by(
+                RuleLifecycleEvent.revision_number.desc(),
+                RuleLifecycleEvent.id.desc(),
+            )
+        )
+        if event_types is not None:
+            statement = statement.where(
+                RuleLifecycleEvent.event_type.in_(tuple(event_types))
+            )
+        for lifecycle_event in self.session.scalars(statement):
+            if lifecycle_event.scope_snapshot == scope_snapshot:
+                return lifecycle_event
+        return None
+
+    def create_lifecycle_event(
+        self,
+        *,
+        engineering_rule: EngineeringRule,
+        engineering_rule_revision: EngineeringRuleRevision,
+        lifecycle_event_id: str,
+        revision_number: int,
+        event_type: RuleLifecycleEventType,
+        scope_snapshot: dict[str, object],
+        basis_snapshot: dict[str, object],
+        authority_snapshot: dict[str, object],
+        effective_from: datetime,
+        expires_at: datetime | None,
+        created_by_actor_id: str,
+        created_by_user_id: int | None,
+        schema_version: str,
+        canonicalization_version: str,
+        hash_algorithm: str,
+        content_hash: str,
+        software_version: str,
+        correlation_id: str,
+        supersedes_rule_lifecycle_event_id: int | None = None,
+    ) -> RuleLifecycleEvent:
+        if engineering_rule not in self.session:
+            raise ValueError("engineering rule must belong to this repository session")
+        if engineering_rule_revision not in self.session:
+            raise ValueError(
+                "engineering rule revision must belong to this repository session"
+            )
+        if engineering_rule_revision.engineering_rule_id != engineering_rule.id:
+            raise ValueError("lifecycle event revision must belong to the same rule")
+        if revision_number <= 0:
+            raise ValueError("lifecycle event revision_number must be positive")
+        if expires_at is not None and expires_at <= effective_from:
+            raise ValueError("lifecycle event expires_at must be after effective_from")
+        if supersedes_rule_lifecycle_event_id is not None:
+            prior = self.session.get(
+                RuleLifecycleEvent, supersedes_rule_lifecycle_event_id
+            )
+            if prior is None:
+                raise ValueError("superseded lifecycle event does not exist")
+            if prior.lifecycle_event_id != lifecycle_event_id:
+                raise ValueError(
+                    "lifecycle event supersession cannot cross event identities"
+                )
+            if prior.engineering_rule_id != engineering_rule.id:
+                raise ValueError(
+                    "lifecycle event supersession must remain within the same rule"
+                )
+            if revision_number != prior.revision_number + 1:
+                raise ValueError(
+                    "lifecycle event correction must use the next revision_number"
+                )
+            if any(
+                item.supersedes_rule_lifecycle_event_id == prior.id
+                for item in self.list_lifecycle_history(lifecycle_event_id)
+            ):
+                raise ValueError("lifecycle event already has a successor")
+        else:
+            if self.list_lifecycle_history(lifecycle_event_id):
+                raise ValueError(
+                    "existing lifecycle event identity requires an explicit prior revision"
+                )
+            if revision_number != 1:
+                raise ValueError("first lifecycle event revision_number must be 1")
+
+        lifecycle_event = RuleLifecycleEvent(
+            lifecycle_event_id=lifecycle_event_id,
+            revision_number=revision_number,
+            engineering_rule_id=engineering_rule.id,
+            engineering_rule_revision_id=engineering_rule_revision.id,
+            event_type=event_type,
+            scope_snapshot=scope_snapshot,
+            basis_snapshot=basis_snapshot,
+            authority_snapshot=authority_snapshot,
+            effective_from=effective_from,
+            expires_at=expires_at,
+            supersedes_rule_lifecycle_event_id=supersedes_rule_lifecycle_event_id,
+            created_by_user_id=created_by_user_id,
+            created_by_actor_id=created_by_actor_id,
+            schema_version=schema_version,
+            canonicalization_version=canonicalization_version,
+            hash_algorithm=hash_algorithm,
+            content_hash=content_hash,
+            software_version=software_version,
+            correlation_id=correlation_id,
+        )
+        self.session.add(lifecycle_event)
+        self.session.flush()
+        self.session.refresh(lifecycle_event)
+        self.session.expunge(lifecycle_event)
+        return lifecycle_event
 
     def get_by_rule_id(self, rule_id: str) -> EngineeringRule | None:
         return self.session.scalar(

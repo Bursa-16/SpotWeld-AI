@@ -9,10 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, event, func, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
 from app.application.governed_unit_of_work import GovernedUnitOfWork
 from app.application.rule_registry_service import (
     GovernedAuditMetadata,
@@ -49,6 +45,8 @@ from app.models.rule_registry import (
     EngineeringRule,
     EngineeringRuleRevision,
     EvidenceReference,
+    RuleLifecycleEvent,
+    RuleLifecycleEventType,
 )
 from app.models.verification import EvidenceVerificationDecision
 from app.repositories.evidence_verification_repository import (
@@ -57,6 +55,9 @@ from app.repositories.evidence_verification_repository import (
 from app.repositories.governance_repository import GovernanceRepository
 from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.rule_registry_repository import RuleRegistryRepository
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 
 @pytest.fixture()
@@ -140,6 +141,7 @@ def _create_draft(
     *,
     evidence_class: EvidenceClass = EvidenceClass.UNRESOLVED,
     enabled: bool = False,
+    allow_source_backed: bool = False,
     audit: GovernedAuditMetadata | None = None,
     evidence_references: tuple[EvidenceReferenceDraft, ...] = (),
 ) -> EngineeringRuleRevision:
@@ -157,6 +159,7 @@ def _create_draft(
         audit=audit or _audit(event_id),
         evidence_references=evidence_references,
         enabled=enabled,
+        allow_source_backed=allow_source_backed,
     )
 
 
@@ -238,6 +241,62 @@ def _promotion_request_hash(payload: dict[str, object]) -> CanonicalRequestHash:
     )
 
 
+def _lifecycle_identity(rule_id: str, namespace: str, key: str) -> CommandIdentity:
+    return CommandIdentity(
+        command_namespace=namespace,
+        command_scope=rule_id,
+        idempotency_key=key,
+    )
+
+
+def _lifecycle_request_hash(payload: dict[str, object]) -> CanonicalRequestHash:
+    return CanonicalRequestHash(
+        value=hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        hash_algorithm="sha256",
+        canonicalization_version="registry-canonical-v1",
+    )
+
+
+def _enablement_basis(
+    *,
+    rule_id: str,
+    source_revision: EngineeringRuleRevision,
+    evidence_references: tuple[EvidenceReference, ...],
+    verified_decisions: tuple[EvidenceVerificationDecision, ...],
+    authority_scope: dict[str, object],
+) -> dict[str, object]:
+    payload = {
+        "rule_id": rule_id,
+        "source_revision_id": source_revision.id,
+        "source_revision": source_revision.revision,
+        "source_content_hash": source_revision.content_hash,
+        "scope_snapshot": authority_scope,
+        "evidence_pins": [
+            {
+                "evidence_reference_id": reference.id,
+                "evidence_id": reference.evidence_id,
+                "evidence_revision": reference.evidence_revision,
+                "verification_decision_id": decision.id,
+                "verification_revision_number": decision.revision_number,
+                "verification_decision_content_hash": decision.content_hash,
+                "verification_authority_snapshot_hash": decision.authority_snapshot_content_hash,
+                "verifier_user_id": decision.verifier_user_id,
+            }
+            for reference, decision in zip(
+                evidence_references,
+                verified_decisions,
+                strict=True,
+            )
+        ],
+    }
+    payload["content_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
 def _verified_decision_for_reference(
     session: Session,
     *,
@@ -245,6 +304,9 @@ def _verified_decision_for_reference(
     verifier: User,
     grantor: User,
     verification_id: str,
+    revision_number: int = 1,
+    supersedes_verification_decision_id: int | None = None,
+    decision_reason: str = "Synthetic VERIFIED decision",
 ) -> EvidenceVerificationDecision:
     repository = EvidenceVerificationRepository(session)
     scope_snapshot = VerificationScopeSnapshot(project="synthetic-project")
@@ -331,16 +393,17 @@ def _verified_decision_for_reference(
     return repository.create_verification_decision(
         draft=EvidenceVerificationDecisionDraft(
             verification_id=verification_id,
-            revision_number=1,
+            revision_number=revision_number,
             evidence_reference_id=evidence_reference.id,
             evidence_verification_delegation_id=delegation.id,
             verifier_user_id=verifier.id,
             authority_snapshot=authority_snapshot.as_dict(),
-            decision_reason="Synthetic VERIFIED decision",
+            decision_reason=decision_reason,
             decided_at=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
             policy_identifier="SDS-115",
             policy_version="0.1 Draft",
             correlation_id=f"{verification_id}-correlation",
+            supersedes_verification_decision_id=supersedes_verification_decision_id,
             created_by_user_id=verifier.id,
             created_by_actor_id="verifier-actor",
             schema_version="verification-test-v1",
@@ -925,6 +988,526 @@ def test_source_backed_promotion_rejects_verifier_same_as_promoter(
         )
 
 
+def test_source_backed_enablement_and_activation_create_lifecycle_history(
+    service_engine,
+) -> None:
+    rule_id = "SOURCE_BACKED_LIFECYCLE_RULE"
+    authority_scope = VerificationScopeSnapshot(
+        project="synthetic-project"
+    ).as_dict()
+
+    with Session(service_engine) as session:
+        users = _seed_promotion_users(session)
+        submitter = users["submitter"]
+        verifier = users["verifier"]
+        promoter = users["promoter"]
+        grantor = users["grantor"]
+        submitter_actor_id = submitter.email
+        submitter_user_id = submitter.id
+        submitter_role = submitter.role
+        promoter_actor_id = promoter.email
+        promoter_user_id = promoter.id
+        promoter_role = promoter.role
+        session.commit()
+        with GovernedUnitOfWork(session) as unit_of_work:
+            service = RuleRegistryService(unit_of_work)
+            _create_identity(
+                service,
+                rule_id,
+                "source-lifecycle-root-event",
+            )
+            source_revision = _create_draft(
+                service,
+                rule_id,
+                "source-backed-draft",
+                "source-lifecycle-draft-event",
+                evidence_class=EvidenceClass.SOURCE_BACKED,
+                allow_source_backed=True,
+                audit=_audit(
+                    "source-lifecycle-draft-audit",
+                    actor_id=submitter_actor_id,
+                    actor_type="user",
+                    actor_user_id=submitter_user_id,
+                    actor_role=submitter_role,
+                    authority_scope=authority_scope,
+                    reason="Synthetic source-backed lifecycle draft",
+                ),
+                evidence_references=(
+                    EvidenceReferenceDraft(
+                        evidence_id="SOURCE_BACKED_LIFECYCLE_EVIDENCE",
+                        evidence_revision="11",
+                        evidence_class=EvidenceClass.UNRESOLVED,
+                        lifecycle_status=RuleLifecycleStatus.DRAFT,
+                        created_by_actor_id="submitter-actor",
+                        created_by_user_id=submitter_user_id,
+                        reference_uri="urn:source-backed:lifecycle",
+                    ),
+                ),
+            )
+            source_revision_id = source_revision.id
+            verified_decision = _verified_decision_for_reference(
+                session,
+                evidence_reference=source_revision.evidence_references[0],
+                verifier=verifier,
+                grantor=grantor,
+                verification_id="SOURCE_BACKED_LIFECYCLE_EVIDENCE-verification",
+            )
+            enable_basis = _enablement_basis(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                evidence_references=(
+                    source_revision.evidence_references[0],
+                ),
+                verified_decisions=(verified_decision,),
+                authority_scope=authority_scope,
+            )
+            enable_identity = _lifecycle_identity(
+                rule_id,
+                RuleRegistryService.ENABLEMENT_COMMAND_NAMESPACE,
+                "enablement-key-1",
+            )
+            enable_request_hash = _lifecycle_request_hash(
+                {
+                    "command": "ENABLE",
+                    "rule_id": rule_id,
+                    "source_revision": source_revision.revision,
+                    "basis_content_hash": enable_basis["content_hash"],
+                    "scope_snapshot": authority_scope,
+                }
+            )
+            enable_result = service.enable_source_backed(
+                rule_id=rule_id,
+                source_revision=source_revision.revision,
+                receipt_id="enablement-receipt-1",
+                command_identity=enable_identity,
+                request_hash=enable_request_hash,
+                audit=_audit(
+                    "source-lifecycle-enable-audit",
+                    actor_id=promoter_actor_id,
+                    actor_type="user",
+                    actor_user_id=promoter_user_id,
+                    actor_role=promoter_role,
+                    authority_scope=authority_scope,
+                    reason="Synthetic source-backed enablement",
+                ),
+                effective_from=datetime(
+                    2031, 2, 3, 4, 5, 7, tzinfo=timezone.utc
+                ),
+                expires_at=datetime(
+                    2031, 12, 31, 23, 59, 59, tzinfo=timezone.utc
+                ),
+                completed_at=datetime(
+                    2031, 2, 3, 4, 5, 8, tzinfo=timezone.utc
+                ),
+            )
+            unit_of_work.commit()
+
+    with Session(service_engine) as session:
+        with GovernedUnitOfWork(session) as replay_uow:
+            replay_result = RuleRegistryService(replay_uow).enable_source_backed(
+                rule_id=rule_id,
+                source_revision="source-backed-draft",
+                receipt_id="enablement-receipt-2",
+                command_identity=enable_identity,
+                request_hash=enable_request_hash,
+                audit=_audit(
+                    "source-lifecycle-enable-audit",
+                    actor_id=promoter_actor_id,
+                    actor_type="user",
+                    actor_user_id=promoter_user_id,
+                    actor_role=promoter_role,
+                    authority_scope=authority_scope,
+                    reason="Synthetic source-backed enablement replay",
+                ),
+                effective_from=datetime(2031, 2, 3, 4, 5, 7, tzinfo=timezone.utc),
+                expires_at=datetime(2031, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
+                completed_at=datetime(2031, 2, 3, 4, 5, 9, tzinfo=timezone.utc),
+            )
+        assert replay_result == enable_result
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
+        activate_identity = _lifecycle_identity(
+            rule_id,
+            RuleRegistryService.ACTIVATION_COMMAND_NAMESPACE,
+            "activation-key-1",
+        )
+        activate_request_hash = _lifecycle_request_hash(
+            {
+                "command": "ACTIVATE",
+                "rule_id": rule_id,
+                "source_revision": "source-backed-draft",
+                "basis_content_hash": enable_basis["content_hash"],
+                "scope_snapshot": authority_scope,
+            }
+        )
+        activate_result = RuleRegistryService(unit_of_work).activate_source_backed(
+            rule_id=rule_id,
+            source_revision="source-backed-draft",
+            receipt_id="activation-receipt-1",
+            command_identity=activate_identity,
+            request_hash=activate_request_hash,
+            audit=_audit(
+                "source-lifecycle-activate-audit",
+                actor_id=promoter_actor_id,
+                actor_type="user",
+                actor_user_id=promoter_user_id,
+                actor_role=promoter_role,
+                authority_scope=authority_scope,
+                reason="Synthetic source-backed activation",
+            ),
+            effective_from=datetime(
+                2031, 2, 3, 4, 5, 10, tzinfo=timezone.utc
+            ),
+            expires_at=datetime(
+                2031, 12, 31, 23, 59, 59, tzinfo=timezone.utc
+            ),
+            completed_at=datetime(
+                2031, 2, 3, 4, 5, 11, tzinfo=timezone.utc
+            ),
+        )
+        unit_of_work.commit()
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as replay_uow:
+        replay_result = RuleRegistryService(replay_uow).activate_source_backed(
+            rule_id=rule_id,
+            source_revision="source-backed-draft",
+            receipt_id="activation-receipt-2",
+            command_identity=activate_identity,
+            request_hash=activate_request_hash,
+            audit=_audit(
+                "source-lifecycle-activate-audit",
+                actor_id=promoter_actor_id,
+                actor_type="user",
+                actor_user_id=promoter_user_id,
+                actor_role=promoter_role,
+                authority_scope=authority_scope,
+                reason="Synthetic source-backed activation replay",
+            ),
+            effective_from=datetime(2031, 2, 3, 4, 5, 10, tzinfo=timezone.utc),
+            expires_at=datetime(2031, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
+            completed_at=datetime(2031, 2, 3, 4, 5, 12, tzinfo=timezone.utc),
+        )
+    assert replay_result == activate_result
+
+    with Session(service_engine) as session:
+        repository = RuleRegistryRepository(session)
+        enable_event = session.get(RuleLifecycleEvent, int(enable_result.result_id))
+        activate_event = session.get(RuleLifecycleEvent, int(activate_result.result_id))
+        assert enable_event is not None
+        assert activate_event is not None
+        assert enable_event.event_type is RuleLifecycleEventType.ENABLE
+        assert activate_event.event_type is RuleLifecycleEventType.ACTIVATE
+        assert enable_event.scope_snapshot == authority_scope
+        assert activate_event.scope_snapshot == authority_scope
+        latest_event = repository.get_latest_lifecycle_event(
+            engineering_rule_revision_id=source_revision_id,
+            scope_snapshot=authority_scope,
+            event_types=(
+                RuleLifecycleEventType.ENABLE,
+                RuleLifecycleEventType.ACTIVATE,
+            ),
+        )
+        assert latest_event is not None
+        assert latest_event.event_type is RuleLifecycleEventType.ACTIVATE
+        assert latest_event.basis_snapshot["content_hash"] == enable_basis["content_hash"]
+
+
+def test_source_backed_activation_requires_prior_enablement(service_engine) -> None:
+    rule_id = "SOURCE_BACKED_ACTIVATION_BLOCKED_RULE"
+    authority_scope = VerificationScopeSnapshot(
+        project="synthetic-project"
+    ).as_dict()
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
+        users = _seed_promotion_users(session)
+        submitter = users["submitter"]
+        verifier = users["verifier"]
+        grantor = users["grantor"]
+        promoter = users["promoter"]
+        service = RuleRegistryService(unit_of_work)
+        _create_identity(service, rule_id, "activation-block-root-event")
+        source_revision = _create_draft(
+            service,
+            rule_id,
+            "activation-block-draft",
+            "activation-block-draft-event",
+            evidence_class=EvidenceClass.SOURCE_BACKED,
+            allow_source_backed=True,
+            audit=_audit(
+                "activation-block-draft-audit",
+                actor_id=submitter.email,
+                actor_type="user",
+                actor_user_id=submitter.id,
+                actor_role=submitter.role,
+                authority_scope=authority_scope,
+                reason="Synthetic activation block draft",
+            ),
+            evidence_references=(
+                EvidenceReferenceDraft(
+                    evidence_id="ACTIVATION_BLOCK_EVIDENCE",
+                    evidence_revision="21",
+                    evidence_class=EvidenceClass.UNRESOLVED,
+                    lifecycle_status=RuleLifecycleStatus.DRAFT,
+                    created_by_actor_id="submitter-actor",
+                    created_by_user_id=submitter.id,
+                    reference_uri="urn:source-backed:activation-block",
+                ),
+            ),
+        )
+        source_revision_id = source_revision.id
+        _verified_decision_for_reference(
+            session,
+            evidence_reference=source_revision.evidence_references[0],
+            verifier=verifier,
+            grantor=grantor,
+            verification_id="ACTIVATION_BLOCK_EVIDENCE-verification",
+        )
+        activation_result = service.activate_source_backed(
+            rule_id=rule_id,
+            source_revision="activation-block-draft",
+            receipt_id="activation-block-receipt",
+            command_identity=_lifecycle_identity(
+                rule_id,
+                RuleRegistryService.ACTIVATION_COMMAND_NAMESPACE,
+                "activation-block-key",
+            ),
+            request_hash=_lifecycle_request_hash(
+                {
+                    "command": "ACTIVATE",
+                    "rule_id": rule_id,
+                    "source_revision": "activation-block-draft",
+                    "scope_snapshot": authority_scope,
+                }
+            ),
+            audit=_audit(
+                "activation-block-audit",
+                actor_id=promoter.email,
+                actor_type="user",
+                actor_user_id=promoter.id,
+                actor_role=promoter.role,
+                authority_scope=authority_scope,
+                reason="Synthetic activation block",
+            ),
+            effective_from=datetime(2031, 2, 3, 4, 5, 13, tzinfo=timezone.utc),
+            expires_at=None,
+            completed_at=datetime(2031, 2, 3, 4, 5, 14, tzinfo=timezone.utc),
+        )
+        unit_of_work.commit()
+
+    with Session(service_engine) as read_session:
+        assert activation_result.result_type == "engineering_rule_lifecycle_denial"
+        assert activation_result.result_revision == "denied"
+        repository = RuleRegistryRepository(read_session)
+        assert (
+            repository.get_latest_lifecycle_event(
+                engineering_rule_revision_id=source_revision_id,
+                scope_snapshot=authority_scope,
+                event_types=(
+                    RuleLifecycleEventType.ENABLE,
+                    RuleLifecycleEventType.ACTIVATE,
+                ),
+            )
+            is None
+        )
+
+
+def test_source_backed_activation_fails_closed_after_evidence_correction(
+    service_engine,
+) -> None:
+    rule_id = "SOURCE_BACKED_CORRECTION_RULE"
+    authority_scope = VerificationScopeSnapshot(
+        project="synthetic-project"
+    ).as_dict()
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
+        users = _seed_promotion_users(session)
+        submitter = users["submitter"]
+        verifier = users["verifier"]
+        promoter = users["promoter"]
+        grantor = users["grantor"]
+        submitter_actor_id = submitter.email
+        submitter_user_id = submitter.id
+        submitter_role = submitter.role
+        verifier_user_id = verifier.id
+        promoter_actor_id = promoter.email
+        promoter_user_id = promoter.id
+        promoter_role = promoter.role
+        service = RuleRegistryService(unit_of_work)
+        _create_identity(service, rule_id, "correction-root-event")
+        source_revision = _create_draft(
+            service,
+            rule_id,
+            "correction-draft",
+            "correction-draft-event",
+            evidence_class=EvidenceClass.SOURCE_BACKED,
+            allow_source_backed=True,
+            audit=_audit(
+                "correction-draft-audit",
+                actor_id=submitter_actor_id,
+                actor_type="user",
+                actor_user_id=submitter_user_id,
+                actor_role=submitter_role,
+                authority_scope=authority_scope,
+                reason="Synthetic correction draft",
+            ),
+            evidence_references=(
+                EvidenceReferenceDraft(
+                    evidence_id="CORRECTION_EVIDENCE",
+                    evidence_revision="31",
+                    evidence_class=EvidenceClass.UNRESOLVED,
+                    lifecycle_status=RuleLifecycleStatus.DRAFT,
+                    created_by_actor_id="submitter-actor",
+                    created_by_user_id=submitter_user_id,
+                    reference_uri="urn:source-backed:correction",
+                ),
+            ),
+        )
+        source_revision_id = source_revision.id
+        source_evidence_reference_id = source_revision.evidence_references[0].id
+        prior_decision = _verified_decision_for_reference(
+            session,
+            evidence_reference=source_revision.evidence_references[0],
+            verifier=verifier,
+            grantor=grantor,
+            verification_id="CORRECTION_EVIDENCE-verification",
+        )
+        prior_decision_id = prior_decision.id
+        prior_decision_delegation_id = (
+            prior_decision.evidence_verification_delegation_id
+        )
+        prior_decision_authority_snapshot = dict(prior_decision.authority_snapshot)
+        prior_decision_authority_snapshot_hash = (
+            prior_decision.authority_snapshot_content_hash
+        )
+        service.enable_source_backed(
+            rule_id=rule_id,
+            source_revision="correction-draft",
+            receipt_id="correction-enable-receipt",
+            command_identity=_lifecycle_identity(
+                rule_id,
+                RuleRegistryService.ENABLEMENT_COMMAND_NAMESPACE,
+                "correction-enable-key",
+            ),
+            request_hash=_lifecycle_request_hash(
+                {
+                    "command": "ENABLE",
+                    "rule_id": rule_id,
+                    "source_revision": "correction-draft",
+                    "scope_snapshot": authority_scope,
+                }
+            ),
+            audit=_audit(
+                "correction-enable-audit",
+                actor_id=promoter_actor_id,
+                actor_type="user",
+                actor_user_id=promoter_user_id,
+                actor_role=promoter_role,
+                authority_scope=authority_scope,
+                reason="Synthetic correction enablement",
+            ),
+            effective_from=datetime(2031, 2, 3, 4, 5, 15, tzinfo=timezone.utc),
+            expires_at=None,
+            completed_at=datetime(2031, 2, 3, 4, 5, 16, tzinfo=timezone.utc),
+        )
+        unit_of_work.commit()
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
+        repository = EvidenceVerificationRepository(session)
+        repository.create_verification_decision(
+            draft=EvidenceVerificationDecisionDraft(
+                verification_id="CORRECTION_EVIDENCE-verification",
+                revision_number=2,
+                evidence_reference_id=source_evidence_reference_id,
+                evidence_verification_delegation_id=prior_decision_delegation_id,
+                verifier_user_id=verifier_user_id,
+                authority_snapshot=prior_decision_authority_snapshot,
+                decision_reason="Corrected VERIFIED decision",
+                decided_at=datetime(
+                    2031, 2, 3, 4, 5, 17, tzinfo=timezone.utc
+                ),
+                policy_identifier="SDS-115",
+                policy_version="0.1 Draft",
+                correlation_id="CORRECTION_EVIDENCE-verification-correlation",
+                supersedes_verification_decision_id=prior_decision_id,
+                created_by_user_id=verifier_user_id,
+                created_by_actor_id="verifier-actor",
+                schema_version="verification-test-v1",
+                canonicalization_version="verification-canonical-v1",
+                hash_algorithm="sha256",
+                content_hash=hashlib.sha256(
+                    json.dumps(
+                        {
+                            "verification_id": "CORRECTION_EVIDENCE-verification",
+                            "evidence_reference_id": source_evidence_reference_id,
+                            "delegation_id": prior_decision_delegation_id,
+                            "verifier_user_id": verifier_user_id,
+                            "authority_snapshot_hash": prior_decision_authority_snapshot_hash,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                software_version="test-build",
+            )
+        )
+        activation_result = RuleRegistryService(unit_of_work).activate_source_backed(
+            rule_id=rule_id,
+            source_revision="correction-draft",
+            receipt_id="correction-activation-receipt",
+            command_identity=_lifecycle_identity(
+                rule_id,
+                RuleRegistryService.ACTIVATION_COMMAND_NAMESPACE,
+                "correction-activation-key",
+            ),
+            request_hash=_lifecycle_request_hash(
+                {
+                    "command": "ACTIVATE",
+                    "rule_id": rule_id,
+                    "source_revision": "correction-draft",
+                    "scope_snapshot": authority_scope,
+                }
+            ),
+            audit=_audit(
+                "correction-activation-audit",
+                actor_id=promoter_actor_id,
+                actor_type="user",
+                actor_user_id=promoter_user_id,
+                actor_role=promoter_role,
+                authority_scope=authority_scope,
+                reason="Synthetic correction activation",
+            ),
+            effective_from=datetime(2031, 2, 3, 4, 5, 18, tzinfo=timezone.utc),
+            expires_at=None,
+            completed_at=datetime(2031, 2, 3, 4, 5, 19, tzinfo=timezone.utc),
+        )
+        unit_of_work.commit()
+
+    with Session(service_engine) as read_session:
+        assert activation_result.result_type == "engineering_rule_lifecycle_denial"
+        assert activation_result.result_revision == "denied"
+        repository = RuleRegistryRepository(read_session)
+        latest_event = repository.get_latest_lifecycle_event(
+            engineering_rule_revision_id=source_revision_id,
+            scope_snapshot=authority_scope,
+            event_types=(
+                RuleLifecycleEventType.ENABLE,
+                RuleLifecycleEventType.ACTIVATE,
+            ),
+        )
+        assert latest_event is not None
+        assert latest_event.event_type is RuleLifecycleEventType.ENABLE
+
+
 def test_enabled_draft_creation_is_rejected(service_engine) -> None:
     with Session(service_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
@@ -947,6 +1530,8 @@ def test_activation_and_evidence_promotion_are_not_exposed(service_engine) -> No
         assert not hasattr(service, "activate_revision")
         assert not hasattr(service, "verify_evidence")
         assert not hasattr(service, "promote_evidence")
+        assert hasattr(service, "enable_source_backed")
+        assert hasattr(service, "activate_source_backed")
         assert hasattr(service, "promote_source_backed")
 
 
