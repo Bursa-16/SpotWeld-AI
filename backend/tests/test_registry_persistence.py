@@ -348,6 +348,102 @@ def test_repository_rejects_authority_bearing_revision_creation(
         )
 
 
+def test_repository_allows_explicit_source_backed_revision_creation(
+    registry_session,
+):
+    evidence = EvidenceReferenceDraft(
+        evidence_id="TEST_SOURCE_BACKED_EVIDENCE",
+        evidence_revision="1",
+        evidence_class=EvidenceClass.UNRESOLVED,
+        lifecycle_status=RuleLifecycleStatus.DRAFT,
+        created_by_actor_id="test-actor",
+        reference_uri="urn:test:source-backed",
+    )
+    repository = RuleRegistryRepository(registry_session)
+    rule = repository.create_rule(
+        rule_id="TEST_SOURCE_BACKED_RULE",
+        created_by_actor_id="test-actor",
+    )
+    source_revision = repository.create_revision(
+        engineering_rule=rule,
+        revision="1.0",
+        name="Synthetic source-backed source draft",
+        status=RuleLifecycleStatus.DRAFT,
+        evidence_class=EvidenceClass.UNRESOLVED,
+        category=RuleCategory.OTHER,
+        parameter="synthetic_parameter",
+        operator=None,
+        min_value=None,
+        max_value=None,
+        unit=None,
+        applicability_metadata=None,
+        applicability_schema_version=None,
+        effective_date=None,
+        expiry_date=None,
+        supersedes_revision_id=None,
+        source_type=None,
+        source_name=None,
+        source_document=None,
+        source_url=None,
+        safe_default=SafeDefault.UNRESOLVED,
+        missing_handling=MissingHandling.DATA_INSUFFICIENT,
+        conflict_handling="REQUIRE_ENGINEERING_REVIEW",
+        unit_mismatch_handling=None,
+        description=None,
+        note=None,
+        enabled=False,
+        reason_for_change="Synthetic source-backed promotion source",
+        version_metadata=_version_metadata(rule.rule_id, "1.0", (evidence,)),
+        created_by_actor_id="test-actor",
+        evidence_references=(evidence,),
+    )
+
+    promoted = repository.create_revision(
+        engineering_rule=rule,
+        revision="2.0",
+        name="Synthetic source-backed revision",
+        status=RuleLifecycleStatus.DRAFT,
+        evidence_class=EvidenceClass.SOURCE_BACKED,
+        category=source_revision.category,
+        parameter=source_revision.parameter,
+        operator=source_revision.operator,
+        min_value=source_revision.min_value,
+        max_value=source_revision.max_value,
+        unit=source_revision.unit,
+        applicability_metadata=source_revision.applicability_metadata,
+        applicability_schema_version=source_revision.applicability_schema_version,
+        effective_date=source_revision.effective_date,
+        expiry_date=source_revision.expiry_date,
+        supersedes_revision_id=source_revision.id,
+        source_type=source_revision.source_type,
+        source_name=source_revision.source_name,
+        source_document=source_revision.source_document,
+        source_url=source_revision.source_url,
+        safe_default=source_revision.safe_default,
+        missing_handling=source_revision.missing_handling,
+        conflict_handling=source_revision.conflict_handling,
+        unit_mismatch_handling=source_revision.unit_mismatch_handling,
+        description=source_revision.description,
+        note=source_revision.note,
+        enabled=False,
+        reason_for_change="Synthetic source-backed promotion",
+        version_metadata=_version_metadata(rule.rule_id, "2.0", (evidence,)),
+        created_by_actor_id="test-actor",
+        evidence_references=source_revision.evidence_references,
+        allow_source_backed=True,
+    )
+    registry_session.commit()
+    registry_session.expire_all()
+
+    persisted = repository.get_revision("TEST_SOURCE_BACKED_RULE", "2.0")
+    assert promoted.evidence_class is EvidenceClass.SOURCE_BACKED
+    assert persisted is not None
+    assert persisted.evidence_class is EvidenceClass.SOURCE_BACKED
+    assert persisted.supersedes_revision_id == source_revision.id
+    assert len(persisted.evidence_references) == 1
+    assert persisted.evidence_references[0].evidence_id == "TEST_SOURCE_BACKED_EVIDENCE"
+
+
 @pytest.mark.parametrize(
     ("evidence_class", "lifecycle_status"),
     [

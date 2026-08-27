@@ -20,11 +20,13 @@ from app.domain.rule_registry_types import (
     RuleSourceType,
     SafeDefault,
 )
+from app.domain.verification_types import VerificationDecisionOutcome
 from app.models.rule_registry import (
     EngineeringRule,
     EngineeringRuleRevision,
     EvidenceReference,
 )
+from app.models.verification import EvidenceVerificationDecision
 
 
 class RuleRegistryRepository:
@@ -67,6 +69,7 @@ class RuleRegistryRepository:
         created_by_actor_id: str,
         created_by_user_id: int | None = None,
         evidence_references: Sequence[EvidenceReferenceDraft] = (),
+        allow_source_backed: bool = False,
         operator: RuleOperator | None = None,
         min_value: float | None = None,
         max_value: float | None = None,
@@ -85,7 +88,7 @@ class RuleRegistryRepository:
         description: str | None = None,
         note: str | None = None,
     ) -> EngineeringRuleRevision:
-        if evidence_class == EvidenceClass.SOURCE_BACKED:
+        if evidence_class == EvidenceClass.SOURCE_BACKED and not allow_source_backed:
             raise RegistryAuthorityError(
                 "SOURCE_BACKED creation requires a later governed evidence workflow"
             )
@@ -154,6 +157,8 @@ class RuleRegistryRepository:
             created_by_user_id=created_by_user_id,
             created_by_actor_id=created_by_actor_id,
         )
+        if evidence_class == EvidenceClass.SOURCE_BACKED:
+            rule_revision._allow_source_backed_revision = True
         self.session.add(rule_revision)
 
         for evidence in evidence_references:
@@ -188,6 +193,26 @@ class RuleRegistryRepository:
         self.session.flush()
         self.session.expire(engineering_rule, ["revisions"])
         return rule_revision
+
+    def get_latest_verified_evidence_decision(
+        self,
+        *,
+        evidence_reference_id: int,
+    ) -> EvidenceVerificationDecision | None:
+        statement = (
+            select(EvidenceVerificationDecision)
+            .where(
+                EvidenceVerificationDecision.evidence_reference_id
+                == evidence_reference_id,
+                EvidenceVerificationDecision.decision_outcome
+                == VerificationDecisionOutcome.VERIFIED,
+            )
+            .order_by(
+                EvidenceVerificationDecision.revision_number.desc(),
+                EvidenceVerificationDecision.id.desc(),
+            )
+        )
+        return self.session.scalar(statement)
 
     def get_by_rule_id(self, rule_id: str) -> EngineeringRule | None:
         return self.session.scalar(

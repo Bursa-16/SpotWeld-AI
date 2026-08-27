@@ -25,19 +25,37 @@ from app.domain.governance_types import (
     RegistryAuthorityError,
     RuleLifecycleStatus,
 )
+from app.domain.idempotency_types import (
+    CanonicalRequestHash,
+    CommandIdentity,
+)
 from app.domain.rule_registry_types import (
     EvidenceReferenceDraft,
     MissingHandling,
     RuleCategory,
     SafeDefault,
 )
+from app.domain.verification_types import (
+    EvidenceVerificationAuthoritySnapshot,
+    EvidenceVerificationDecisionDraft,
+    EvidenceVerificationDelegationDraft,
+    VerificationCapability,
+    VerificationDelegationStatus,
+    VerificationScopeSnapshot,
+)
+from app.models.entities import User
 from app.models.governance import GovernedAuditEvent
 from app.models.rule_registry import (
     EngineeringRule,
     EngineeringRuleRevision,
     EvidenceReference,
 )
+from app.models.verification import EvidenceVerificationDecision
+from app.repositories.evidence_verification_repository import (
+    EvidenceVerificationRepository,
+)
 from app.repositories.governance_repository import GovernanceRepository
+from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.rule_registry_repository import RuleRegistryRepository
 
 
@@ -62,21 +80,29 @@ def _audit(
     *,
     correlation_id: str | None = "synthetic-correlation",
     idempotency_key: str | None = "trace-key",
+    actor_id: str = "synthetic-actor",
+    actor_type: str = "service",
+    actor_user_id: int | None = None,
+    actor_role: str | None = "synthetic-role",
+    authority_scope: dict[str, object] | None = None,
+    reason: str = "Synthetic draft command",
+    detail: dict[str, object] | None = None,
 ) -> GovernedAuditMetadata:
     return GovernedAuditMetadata(
         event_id=event_id,
-        actor_id="synthetic-actor",
-        actor_type="service",
-        actor_role="synthetic-role",
-        authority_scope={"project": "synthetic-project"},
-        reason="Synthetic draft command",
+        actor_id=actor_id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        authority_scope=authority_scope or {"project": "synthetic-project"},
+        reason=reason,
         correlation_id=correlation_id,
         idempotency_key=idempotency_key,
         schema_version="audit-test-v1",
         software_version="test-build",
         canonicalization_version="audit-canonical-v1",
         hash_algorithm="sha256",
-        detail={"caller_trace": "synthetic"},
+        detail=detail or {"caller_trace": "synthetic"},
         created_at=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
     )
 
@@ -100,8 +126,10 @@ def _create_identity(
     service: RuleRegistryService,
     rule_id: str,
     event_id: str,
+    *,
+    audit: GovernedAuditMetadata | None = None,
 ) -> EngineeringRule:
-    return service.create_identity(rule_id=rule_id, audit=_audit(event_id))
+    return service.create_identity(rule_id=rule_id, audit=audit or _audit(event_id))
 
 
 def _create_draft(
@@ -132,9 +160,214 @@ def _create_draft(
     )
 
 
+def _source_backed_version(
+    *,
+    rule_id: str,
+    source_revision: EngineeringRuleRevision,
+    target_revision: str,
+    evidence_pins: list[dict[str, object]],
+    authority_scope: dict[str, object],
+) -> ContentVersionMetadata:
+    payload = {
+        "rule_id": rule_id,
+        "source_revision": source_revision.revision,
+        "source_revision_id": source_revision.id,
+        "target_revision": target_revision,
+        "source_content_hash": source_revision.content_hash,
+        "authority_scope": authority_scope,
+        "evidence_pins": evidence_pins,
+    }
+    return ContentVersionMetadata(
+        schema_version="registry-test-v1",
+        canonicalization_version="registry-canonical-v1",
+        hash_algorithm="sha256",
+        content_hash=hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        software_version="test-build",
+    )
+
+
+def _seed_promotion_users(session: Session) -> dict[str, User]:
+    users = {
+        "submitter": User(
+            email="submitter@example.com",
+            full_name="Submitter User",
+            password_hash="hash-submit",
+            role="Engineer",
+        ),
+        "verifier": User(
+            email="verifier@example.com",
+            full_name="Verifier User",
+            password_hash="hash-verify",
+            role="Verifier",
+        ),
+        "promoter": User(
+            email="promoter@example.com",
+            full_name="Promoter User",
+            password_hash="hash-promote",
+            role="Approver",
+        ),
+        "grantor": User(
+            email="grantor@example.com",
+            full_name="Grantor User",
+            password_hash="hash-grant",
+            role="Approver",
+        ),
+    }
+    session.add_all(users.values())
+    session.flush()
+    return users
+
+
+def _promotion_identity(rule_id: str, key: str) -> CommandIdentity:
+    return CommandIdentity(
+        command_namespace=RuleRegistryService.COMMAND_NAMESPACE,
+        command_scope=rule_id,
+        idempotency_key=key,
+    )
+
+
+def _promotion_request_hash(payload: dict[str, object]) -> CanonicalRequestHash:
+    return CanonicalRequestHash(
+        value=hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        hash_algorithm="sha256",
+        canonicalization_version="registry-canonical-v1",
+    )
+
+
+def _verified_decision_for_reference(
+    session: Session,
+    *,
+    evidence_reference: EvidenceReference,
+    verifier: User,
+    grantor: User,
+    verification_id: str,
+) -> EvidenceVerificationDecision:
+    repository = EvidenceVerificationRepository(session)
+    scope_snapshot = VerificationScopeSnapshot(project="synthetic-project")
+    delegation = repository.create_delegation_revision(
+        draft=EvidenceVerificationDelegationDraft(
+            delegation_id=f"{verification_id}-delegation",
+            revision_number=1,
+            verifier_user_id=verifier.id,
+            granted_by_user_id=grantor.id,
+            scope_snapshot=scope_snapshot,
+            effective_from=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+            expires_at=None,
+            revoked_by_user_id=None,
+            revoked_at=None,
+            revoked_reason=None,
+            status=VerificationDelegationStatus.ACTIVE,
+            capability=VerificationCapability.EVIDENCE_VERIFICATION,
+            created_by_user_id=grantor.id,
+            created_by_actor_id="grantor-actor",
+            schema_version="verification-test-v1",
+            canonicalization_version="verification-canonical-v1",
+            hash_algorithm="sha256",
+            content_hash=hashlib.sha256(
+                json.dumps(
+                    {
+                        "delegation_id": f"{verification_id}-delegation",
+                        "verifier_user_id": verifier.id,
+                        "scope_snapshot": scope_snapshot.as_dict(),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            software_version="test-build",
+        )
+    )
+    authority_snapshot = EvidenceVerificationAuthoritySnapshot(
+        verifier_user_id=verifier.id,
+        verifier_role_snapshot=verifier.role,
+        capability=VerificationCapability.EVIDENCE_VERIFICATION,
+        resource_scope=scope_snapshot,
+        delegation_id=delegation.delegation_id,
+        delegation_revision_number=delegation.revision_number,
+        delegation_status=delegation.status,
+        delegation_effective_from=delegation.effective_from,
+        delegation_expires_at=delegation.expires_at,
+        delegation_revoked_at=delegation.revoked_at,
+        policy_identifier="SDS-115",
+        policy_version="0.1 Draft",
+        decision_at=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+        correlation_id=f"{verification_id}-correlation",
+        schema_version="evidence-verification-authority-snapshot-v1",
+        canonicalization_version="canonical-v1",
+        hash_algorithm="sha256",
+        content_hash="",
+        software_version="test-build",
+    )
+    authority_hash = hashlib.sha256(
+        json.dumps(
+            authority_snapshot.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    authority_snapshot = EvidenceVerificationAuthoritySnapshot(
+        verifier_user_id=verifier.id,
+        verifier_role_snapshot=verifier.role,
+        capability=VerificationCapability.EVIDENCE_VERIFICATION,
+        resource_scope=scope_snapshot,
+        delegation_id=delegation.delegation_id,
+        delegation_revision_number=delegation.revision_number,
+        delegation_status=delegation.status,
+        delegation_effective_from=delegation.effective_from,
+        delegation_expires_at=delegation.expires_at,
+        delegation_revoked_at=delegation.revoked_at,
+        policy_identifier="SDS-115",
+        policy_version="0.1 Draft",
+        decision_at=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+        correlation_id=f"{verification_id}-correlation",
+        schema_version="evidence-verification-authority-snapshot-v1",
+        canonicalization_version="canonical-v1",
+        hash_algorithm="sha256",
+        content_hash=authority_hash,
+        software_version="test-build",
+    )
+    return repository.create_verification_decision(
+        draft=EvidenceVerificationDecisionDraft(
+            verification_id=verification_id,
+            revision_number=1,
+            evidence_reference_id=evidence_reference.id,
+            evidence_verification_delegation_id=delegation.id,
+            verifier_user_id=verifier.id,
+            authority_snapshot=authority_snapshot.as_dict(),
+            decision_reason="Synthetic VERIFIED decision",
+            decided_at=datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+            policy_identifier="SDS-115",
+            policy_version="0.1 Draft",
+            correlation_id=f"{verification_id}-correlation",
+            created_by_user_id=verifier.id,
+            created_by_actor_id="verifier-actor",
+            schema_version="verification-test-v1",
+            canonicalization_version="verification-canonical-v1",
+            hash_algorithm="sha256",
+            content_hash=hashlib.sha256(
+                json.dumps(
+                    {
+                        "verification_id": verification_id,
+                        "evidence_reference_id": evidence_reference.id,
+                        "delegation_id": delegation.id,
+                        "verifier_user_id": verifier.id,
+                        "authority_snapshot_hash": authority_hash,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            software_version="test-build",
+        )
+    )
+
+
 def test_create_registry_identity_within_uow(service_engine) -> None:
-    with Session(service_engine) as session:
-        with GovernedUnitOfWork(session) as unit_of_work:
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
             rule = _create_identity(
                 RuleRegistryService(unit_of_work),
                 "SERVICE_IDENTITY_RULE",
@@ -162,8 +395,9 @@ def test_create_non_authoritative_draft_revision_with_evidence(
         created_by_actor_id="synthetic-actor",
         reference_metadata={"state": "unverified"},
     )
-    with Session(service_engine) as session:
-        with GovernedUnitOfWork(session) as unit_of_work:
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
             _create_identity(service, "DRAFT_RULE", "draft-identity-event")
             revision = _create_draft(
@@ -345,6 +579,352 @@ def test_source_backed_draft_creation_is_rejected(service_engine) -> None:
                 )
 
 
+def test_source_backed_promotion_creates_revision_and_replays_idempotently(
+    service_engine,
+) -> None:
+    rule_id = "SOURCE_BACKED_PROMOTION_RULE"
+    source_revision_name = "draft-1"
+    promoted_revision_name = "source-backed-1"
+    authority_scope = VerificationScopeSnapshot(
+        project="synthetic-project"
+    ).as_dict()
+
+    with Session(service_engine) as session:
+        with GovernedUnitOfWork(session) as unit_of_work:
+            users = _seed_promotion_users(session)
+            submitter = users["submitter"]
+            verifier = users["verifier"]
+            promoter = users["promoter"]
+            grantor = users["grantor"]
+            source_audit = _audit(
+                "source-draft-event",
+                actor_id="submitter-actor",
+                actor_type="user",
+                actor_user_id=submitter.id,
+                actor_role=submitter.role,
+                authority_scope=authority_scope,
+                reason="Synthetic source-backed draft",
+            )
+            draft_audit = _audit(
+                "source-draft-revision-event",
+                actor_id="submitter-actor",
+                actor_type="user",
+                actor_user_id=submitter.id,
+                actor_role=submitter.role,
+                authority_scope=authority_scope,
+                reason="Synthetic source-backed draft",
+            )
+            service = RuleRegistryService(unit_of_work)
+            _create_identity(
+                service,
+                rule_id,
+                "source-root-event",
+                audit=source_audit,
+            )
+            evidence_references = (
+                EvidenceReferenceDraft(
+                    evidence_id="SOURCE_BACKED_EVIDENCE_A",
+                    evidence_revision="1",
+                    evidence_class=EvidenceClass.UNRESOLVED,
+                    lifecycle_status=RuleLifecycleStatus.DRAFT,
+                    created_by_actor_id="submitter-actor",
+                    created_by_user_id=submitter.id,
+                    reference_uri="urn:source-backed:evidence-a",
+                ),
+                EvidenceReferenceDraft(
+                    evidence_id="SOURCE_BACKED_EVIDENCE_B",
+                    evidence_revision="7",
+                    evidence_class=EvidenceClass.UNRESOLVED,
+                    lifecycle_status=RuleLifecycleStatus.DRAFT,
+                    created_by_actor_id="submitter-actor",
+                    created_by_user_id=submitter.id,
+                    reference_uri="urn:source-backed:evidence-b",
+                ),
+            )
+            source_revision = _create_draft(
+                service,
+                rule_id,
+                source_revision_name,
+                "source-draft-revision-event",
+                audit=draft_audit,
+                evidence_references=evidence_references,
+            )
+            verified_decisions = [
+                _verified_decision_for_reference(
+                    session,
+                    evidence_reference=reference,
+                    verifier=verifier,
+                    grantor=grantor,
+                    verification_id=f"{reference.evidence_id}-verification",
+                )
+                for reference in source_revision.evidence_references
+            ]
+            evidence_pins = [
+                {
+                    "evidence_reference_id": reference.id,
+                    "evidence_id": reference.evidence_id,
+                    "evidence_revision": reference.evidence_revision,
+                    "verification_decision_id": decision.id,
+                    "verification_revision_number": decision.revision_number,
+                    "verifier_user_id": decision.verifier_user_id,
+                }
+                for reference, decision in zip(
+                    source_revision.evidence_references,
+                    verified_decisions,
+                    strict=True,
+                )
+            ]
+            version_metadata = _source_backed_version(
+                rule_id=rule_id,
+                source_revision=source_revision,
+                target_revision=promoted_revision_name,
+                evidence_pins=evidence_pins,
+                authority_scope=authority_scope,
+            )
+            command_identity = _promotion_identity(rule_id, "promotion-key-1")
+            request_hash = _promotion_request_hash(
+                {
+                    "rule_id": rule_id,
+                    "source_revision": source_revision.revision,
+                    "target_revision": promoted_revision_name,
+                    "authority_scope": authority_scope,
+                    "version_hash": version_metadata.content_hash,
+                }
+            )
+            promotion_audit = _audit(
+                "promotion-event",
+                actor_id="promoter-actor",
+                actor_type="user",
+                actor_user_id=promoter.id,
+                actor_role=promoter.role,
+                authority_scope=authority_scope,
+                reason="Synthetic source-backed promotion",
+            )
+            result = service.promote_source_backed(
+                rule_id=rule_id,
+                source_revision=source_revision_name,
+                revision=promoted_revision_name,
+                version_metadata=version_metadata,
+                receipt_id="promotion-receipt-1",
+                command_identity=command_identity,
+                request_hash=request_hash,
+                audit=promotion_audit,
+                completed_at=datetime(2031, 2, 3, 4, 5, 7, tzinfo=timezone.utc),
+            )
+            unit_of_work.commit()
+
+    with Session(service_engine) as replay_session, GovernedUnitOfWork(
+        replay_session
+    ) as replay_uow:
+            replay = RuleRegistryService(replay_uow).promote_source_backed(
+                rule_id=rule_id,
+                source_revision=source_revision_name,
+                revision=promoted_revision_name,
+                version_metadata=version_metadata,
+                receipt_id="promotion-receipt-2",
+                command_identity=command_identity,
+                request_hash=request_hash,
+                audit=promotion_audit,
+                completed_at=datetime(2031, 2, 3, 4, 5, 8, tzinfo=timezone.utc),
+            )
+            assert replay == result
+
+    with Session(service_engine) as conflict_session, GovernedUnitOfWork(
+        conflict_session
+    ) as conflict_uow, pytest.raises(ValueError, match="idempotency conflict"):
+        RuleRegistryService(conflict_uow).promote_source_backed(
+            rule_id=rule_id,
+            source_revision=source_revision_name,
+            revision=promoted_revision_name,
+            version_metadata=version_metadata,
+            receipt_id="promotion-receipt-3",
+            command_identity=command_identity,
+            request_hash=_promotion_request_hash(
+                {
+                    "rule_id": rule_id,
+                    "source_revision": source_revision_name,
+                    "target_revision": promoted_revision_name,
+                    "authority_scope": authority_scope,
+                    "version_hash": "different",
+                }
+            ),
+            audit=promotion_audit,
+            completed_at=datetime(2031, 2, 3, 4, 5, 9, tzinfo=timezone.utc),
+        )
+
+    in_progress_identity = _promotion_identity(rule_id, "promotion-key-2")
+    in_progress_request_hash = _promotion_request_hash(
+        {
+            "rule_id": rule_id,
+            "source_revision": source_revision_name,
+            "target_revision": promoted_revision_name,
+            "authority_scope": authority_scope,
+            "version_hash": version_metadata.content_hash,
+        }
+    )
+    with Session(service_engine) as in_progress_session, GovernedUnitOfWork(
+        in_progress_session
+    ) as in_progress_uow:
+            IdempotencyRepository(in_progress_session).add_reserved(
+                receipt_id="promotion-receipt-4",
+                identity=in_progress_identity,
+                request_hash=in_progress_request_hash,
+                correlation_id=promotion_audit.correlation_id,
+                schema_version=promotion_audit.schema_version,
+                software_version=promotion_audit.software_version,
+                created_at=promotion_audit.created_at,
+            )
+            with pytest.raises(RuntimeError, match="already in progress"):
+                RuleRegistryService(in_progress_uow).promote_source_backed(
+                    rule_id=rule_id,
+                    source_revision=source_revision_name,
+                    revision=promoted_revision_name,
+                    version_metadata=version_metadata,
+                    receipt_id="promotion-receipt-5",
+                    command_identity=in_progress_identity,
+                    request_hash=in_progress_request_hash,
+                    audit=promotion_audit,
+                    completed_at=datetime(
+                        2031, 2, 3, 4, 5, 10, tzinfo=timezone.utc
+                    ),
+                )
+
+    with Session(service_engine) as read_session:
+        repository = RuleRegistryRepository(read_session)
+        promoted = repository.get_revision(rule_id, promoted_revision_name)
+        source = repository.get_revision(rule_id, source_revision_name)
+        assert promoted is not None
+        assert source is not None
+        assert promoted.evidence_class is EvidenceClass.SOURCE_BACKED
+        assert promoted.status is RuleLifecycleStatus.DRAFT
+        assert promoted.supersedes_revision_id == source.id
+        assert promoted.content_hash == version_metadata.content_hash
+        assert len(promoted.evidence_references) == 2
+        assert promoted.evidence_references[0].evidence_id == "SOURCE_BACKED_EVIDENCE_A"
+        assert promoted.evidence_references[1].evidence_revision == "7"
+
+
+def test_source_backed_promotion_rejects_verifier_same_as_promoter(
+    service_engine,
+) -> None:
+    rule_id = "SOURCE_BACKED_PROMOTION_DENIAL_RULE"
+    authority_scope = VerificationScopeSnapshot(
+        project="synthetic-project"
+    ).as_dict()
+
+    with Session(service_engine) as session, GovernedUnitOfWork(
+        session
+    ) as unit_of_work:
+        users = _seed_promotion_users(session)
+        submitter = users["submitter"]
+        verifier = users["verifier"]
+        grantor = users["grantor"]
+        source_audit = _audit(
+            "source-denial-draft-event",
+            actor_id="submitter-actor",
+            actor_type="user",
+            actor_user_id=submitter.id,
+            actor_role=submitter.role,
+            authority_scope=authority_scope,
+            reason="Synthetic source-backed denial draft",
+        )
+        draft_audit = _audit(
+            "source-denial-draft-revision-event",
+            actor_id="submitter-actor",
+            actor_type="user",
+            actor_user_id=submitter.id,
+            actor_role=submitter.role,
+            authority_scope=authority_scope,
+            reason="Synthetic source-backed denial draft",
+        )
+        service = RuleRegistryService(unit_of_work)
+        _create_identity(
+            service,
+            rule_id,
+            "source-denial-root-event",
+            audit=source_audit,
+        )
+        evidence_reference = EvidenceReferenceDraft(
+            evidence_id="SOURCE_BACKED_DENIAL_EVIDENCE",
+            evidence_revision="3",
+            evidence_class=EvidenceClass.UNRESOLVED,
+            lifecycle_status=RuleLifecycleStatus.DRAFT,
+            created_by_actor_id="submitter-actor",
+            created_by_user_id=submitter.id,
+            reference_uri="urn:source-backed:denial",
+        )
+        source_revision = _create_draft(
+            service,
+            rule_id,
+            "draft-1",
+            "source-denial-draft-revision-event",
+            audit=draft_audit,
+            evidence_references=(evidence_reference,),
+        )
+        verified_decision = _verified_decision_for_reference(
+            session,
+            evidence_reference=source_revision.evidence_references[0],
+            verifier=verifier,
+            grantor=grantor,
+            verification_id="SOURCE_BACKED_DENIAL_EVIDENCE-verification",
+        )
+        version_metadata = _source_backed_version(
+            rule_id=rule_id,
+            source_revision=source_revision,
+            target_revision="source-backed-denied",
+            evidence_pins=[
+                {
+                    "evidence_reference_id": source_revision.evidence_references[0].id,
+                    "evidence_id": source_revision.evidence_references[0].evidence_id,
+                    "evidence_revision": source_revision.evidence_references[0].evidence_revision,
+                    "verification_decision_id": verified_decision.id,
+                    "verification_revision_number": verified_decision.revision_number,
+                    "verifier_user_id": verified_decision.verifier_user_id,
+                }
+            ],
+            authority_scope=authority_scope,
+        )
+        denial_audit = _audit(
+            "promotion-denial-event",
+            actor_id="verifier-actor",
+            actor_type="user",
+            actor_user_id=verifier.id,
+            actor_role=verifier.role,
+            authority_scope=authority_scope,
+            reason="Synthetic source-backed promotion denial",
+        )
+        result = RuleRegistryService(unit_of_work).promote_source_backed(
+            rule_id=rule_id,
+            source_revision="draft-1",
+            revision="source-backed-denied",
+            version_metadata=version_metadata,
+            receipt_id="promotion-denial-receipt",
+            command_identity=_promotion_identity(rule_id, "promotion-denial-key"),
+            request_hash=_promotion_request_hash(
+                {
+                    "rule_id": rule_id,
+                    "source_revision": "draft-1",
+                    "target_revision": "source-backed-denied",
+                    "authority_scope": authority_scope,
+                    "version_hash": version_metadata.content_hash,
+                }
+            ),
+            audit=denial_audit,
+            completed_at=datetime(2031, 2, 3, 4, 5, 11, tzinfo=timezone.utc),
+        )
+        unit_of_work.commit()
+
+    with Session(service_engine) as read_session:
+        assert result.result_type == "engineering_rule_promotion_denial"
+        assert result.result_revision == "denied"
+        assert (
+            RuleRegistryRepository(read_session).get_revision(
+                rule_id, "source-backed-denied"
+            )
+            is None
+        )
+
+
 def test_enabled_draft_creation_is_rejected(service_engine) -> None:
     with Session(service_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
@@ -367,6 +947,7 @@ def test_activation_and_evidence_promotion_are_not_exposed(service_engine) -> No
         assert not hasattr(service, "activate_revision")
         assert not hasattr(service, "verify_evidence")
         assert not hasattr(service, "promote_evidence")
+        assert hasattr(service, "promote_source_backed")
 
 
 def test_explicit_uow_rollback_removes_draft_and_audit(service_engine) -> None:

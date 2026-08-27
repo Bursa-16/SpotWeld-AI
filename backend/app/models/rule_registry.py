@@ -55,7 +55,7 @@ class EngineeringRule(Base):
     created_by_actor_id: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
-    revisions: Mapped[list["EngineeringRuleRevision"]] = relationship(
+    revisions: Mapped[list[EngineeringRuleRevision]] = relationship(
         order_by="EngineeringRuleRevision.id",
         viewonly=True,
     )
@@ -175,7 +175,7 @@ class EngineeringRuleRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     engineering_rule: Mapped[EngineeringRule] = relationship()
-    evidence_references: Mapped[list["EvidenceReference"]] = relationship(
+    evidence_references: Mapped[list[EvidenceReference]] = relationship(
         order_by="EvidenceReference.id",
         viewonly=True,
     )
@@ -381,7 +381,13 @@ class RuleApplicability(Base):
 
 
 def _reject_phase1_authority_revision(_mapper, _connection, target) -> None:
-    if target.evidence_class == EvidenceClass.SOURCE_BACKED or target.enabled:
+    if target.enabled:
+        raise RegistryAuthorityError(
+            "Phase 1 cannot persist enabled or SOURCE_BACKED Registry revisions"
+        )
+    if target.evidence_class == EvidenceClass.SOURCE_BACKED and not getattr(
+        target, "_allow_source_backed_revision", False
+    ):
         raise RegistryAuthorityError(
             "Phase 1 cannot persist enabled or SOURCE_BACKED Registry revisions"
         )
