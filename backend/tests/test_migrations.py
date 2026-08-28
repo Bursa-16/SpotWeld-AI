@@ -5,8 +5,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import app.models  # noqa: F401
 import pytest
+from alembic import command
 from alembic.config import Config
+from app.db.session import Base
+from app.domain.governance_types import (
+    ContentVersionMetadata,
+    EvidenceClass,
+    RuleLifecycleStatus,
+)
+from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
+from app.models.rule_registry import EngineeringRuleRevision
+from app.repositories.rule_registry_repository import RuleRegistryRepository
 from sqlalchemy import (
     CheckConstraint,
     ForeignKeyConstraint,
@@ -19,18 +30,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
-import app.models  # noqa: F401
-from alembic import command
-from app.db.session import Base
-from app.domain.governance_types import (
-    ContentVersionMetadata,
-    EvidenceClass,
-    RuleLifecycleStatus,
-)
-from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
-from app.models.rule_registry import EngineeringRuleRevision
-from app.repositories.rule_registry_repository import RuleRegistryRepository
 
 BACKEND_ROOT = Path(__file__).parents[1]
 BASE_REGISTRY_TABLES = {
@@ -54,8 +53,13 @@ MRC_TABLES = {
     "machine_readiness_assessment_revisions",
     "machine_readiness_check_results",
 }
+DWP_TABLES = {
+    "digital_weld_passports",
+    "digital_weld_passport_revisions",
+    "digital_weld_passport_lifecycle_events",
+}
 CORE_GOVERNED_TABLES = BASE_REGISTRY_TABLES | LIFECYCLE_TABLES | VERIFICATION_TABLES
-ALL_GOVERNED_TABLES = CORE_GOVERNED_TABLES | EVALUATION_TABLES | MRC_TABLES
+ALL_GOVERNED_TABLES = CORE_GOVERNED_TABLES | EVALUATION_TABLES | MRC_TABLES | DWP_TABLES
 
 
 def _sqlite_url(database_path: Path) -> str:
@@ -251,7 +255,7 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert ALL_GOVERNED_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0009_machine_readiness_persistence"
+                "0010_digital_weld_passport"
             )
             for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
@@ -592,7 +596,7 @@ def test_rule_evaluation_persistence_migration_round_trip(
         _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
         with upgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0009_machine_readiness_persistence"
+                "0010_digital_weld_passport"
             )
 
     _run_downgrade(monkeypatch, database_url, "0007_rule_lifecycle_events")
@@ -624,7 +628,7 @@ def test_machine_readiness_persistence_migration_round_trip(
         _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
         with upgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0009_machine_readiness_persistence"
+                "0010_digital_weld_passport"
             )
 
     _run_downgrade(monkeypatch, database_url, "0008_rule_evaluation_persistence")

@@ -1,3 +1,9 @@
+from app.models.digital_weld_passport import (  # noqa: F401
+    DigitalWeldPassport,
+    DigitalWeldPassportLifecycleEvent,
+    DigitalWeldPassportLifecycleState,
+    DigitalWeldPassportRevision,
+)
 from app.models.entities import *
 from app.models.governance import GovernedAuditEvent  # noqa: F401
 from app.models.machine_readiness import (  # noqa: F401
