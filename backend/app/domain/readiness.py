@@ -46,15 +46,29 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
+from typing import Any
+
+from app.domain.governance_types import EvidenceClass
+from app.domain.rule_applicability import (
+    ApplicabilityResolutionOutcome,
+    GovernedApplicabilityContext,
+    GovernedApplicabilityResolution,
+)
 
 __all__ = [
     "READY_PREREQUISITES",
     "CheckCondition",
+    "GovernedMachineReadinessCheck",
+    "GovernedRuleEvaluationSnapshot",
+    "MachineReadinessCheckTrace",
+    "MachineReadinessResult",
     "ReadinessContribution",
     "ReadinessResult",
     "ReadinessState",
     "aggregate_readiness",
+    "evaluate_machine_readiness",
 ]
 
 
@@ -345,8 +359,7 @@ def aggregate_readiness(
     elif not_evaluated or validated_applicable_rule_count < 1:
         state = ReadinessState.NOT_EVALUATED
         reasons = _reasons(not_evaluated, "not evaluated") or (
-            "zero applicable validated engineering rules; no validated basis "
-            "for readiness",
+            "zero applicable validated engineering rules; no validated basis for readiness",
         )
     elif not persistence_confirmed:
         # documents/112 sections 4.4 and 11.4 and 114 section 14.3: with no
@@ -355,8 +368,7 @@ def aggregate_readiness(
         # other computed states are preserved verbatim for traceability.
         state = ReadinessState.MANUAL_REVIEW_REQUIRED
         reasons = (
-            "READY refused: decision/audit persistence unavailable; result "
-            "is non-authoritative (manual review required)",
+            "READY refused: decision/audit persistence unavailable; result is non-authoritative (manual review required)",
         )
     elif not all(value for _, value in prerequisites):
         state = ReadinessState.MANUAL_REVIEW_REQUIRED
@@ -366,8 +378,7 @@ def aggregate_readiness(
     else:
         state = ReadinessState.READY
         reasons = (
-            "all required applicable checks passed and every READY "
-            "prerequisite is satisfied",
+            "all required applicable checks passed and every READY prerequisite is satisfied",
         )
 
     return ReadinessResult(
@@ -375,4 +386,531 @@ def aggregate_readiness(
         reasons=reasons,
         prerequisites=prerequisites,
         authoritative=persistence_confirmed,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedRuleEvaluationSnapshot:
+    """Exact persisted governed rule-evaluation revision snapshot."""
+
+    evaluation_id: str
+    revision_number: int
+    comparison: Any
+
+    def __post_init__(self) -> None:
+        if not self.evaluation_id.strip():
+            raise ValueError("evaluation_id must be a non-empty string")
+        if self.revision_number <= 0:
+            raise ValueError("revision_number must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedMachineReadinessCheck:
+    """One governed MRC check definition and its pinned evaluation snapshots."""
+
+    check_id: str
+    required: bool = True
+    evaluations: tuple[GovernedRuleEvaluationSnapshot, ...] | Sequence[
+        GovernedRuleEvaluationSnapshot
+    ] = ()
+    description: str | None = None
+
+    def __post_init__(self) -> None:
+        check_id = self.check_id.strip()
+        if not check_id:
+            raise ValueError("check_id must be a non-empty string")
+        evaluations = (
+            self.evaluations
+            if isinstance(self.evaluations, tuple)
+            else tuple(self.evaluations)
+        )
+        for evaluation in evaluations:
+            if not isinstance(evaluation, GovernedRuleEvaluationSnapshot):
+                raise TypeError(
+                    "evaluations must contain GovernedRuleEvaluationSnapshot values"
+                )
+        description = self.description.strip() if self.description else None
+        object.__setattr__(self, "check_id", check_id)
+        object.__setattr__(self, "evaluations", evaluations)
+        object.__setattr__(self, "description", description)
+
+
+@dataclass(frozen=True, slots=True)
+class MachineReadinessCheckTrace:
+    """Immutable provenance for one governed MRC check."""
+
+    check_id: str
+    required: bool
+    evaluations: tuple[GovernedRuleEvaluationSnapshot, ...]
+    condition: CheckCondition
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class MachineReadinessResult:
+    """Deterministic, provenance-complete machine readiness aggregate."""
+
+    state: ReadinessState
+    reasons: tuple[str, ...]
+    prerequisites: tuple[tuple[str, bool], ...]
+    context: GovernedApplicabilityContext
+    decision_time: datetime
+    checks: tuple[MachineReadinessCheckTrace, ...]
+    validated_applicable_basis_count: int
+
+
+def _selected_candidate(
+    applicability: GovernedApplicabilityResolution,
+):
+    for candidate in applicability.candidates:
+        if candidate.candidate_id == applicability.selected_candidate_id:
+            return candidate
+    return None
+
+
+def _canonicalize_evaluations(
+    evaluations: Sequence[GovernedRuleEvaluationSnapshot],
+) -> tuple[GovernedRuleEvaluationSnapshot, ...]:
+    unique: dict[tuple[str, int], GovernedRuleEvaluationSnapshot] = {}
+    for evaluation in evaluations:
+        key = (evaluation.evaluation_id, evaluation.revision_number)
+        existing = unique.get(key)
+        if existing is not None and existing != evaluation:
+            raise ValueError(
+                "conflicting governed rule-evaluation snapshots supplied for the "
+                "same evaluation_id/revision_number"
+            )
+        unique[key] = evaluation
+    return tuple(
+        sorted(
+            unique.values(),
+            key=lambda item: (
+                item.evaluation_id,
+                item.revision_number,
+                item.comparison.rule_id,
+                item.comparison.revision,
+                item.comparison.outcome.value,
+            ),
+        )
+    )
+
+
+def _merge_checks(
+    checks: Sequence[GovernedMachineReadinessCheck],
+) -> tuple[GovernedMachineReadinessCheck, ...]:
+    merged: dict[str, GovernedMachineReadinessCheck] = {}
+    for check in checks:
+        existing = merged.get(check.check_id)
+        if existing is None:
+            merged[check.check_id] = check
+            continue
+        if existing.required != check.required:
+            raise ValueError(
+                f"conflicting required flag supplied for check_id {check.check_id}"
+            )
+        if (
+            existing.description is not None
+            and check.description is not None
+            and existing.description != check.description
+        ):
+            raise ValueError(
+                f"conflicting description supplied for check_id {check.check_id}"
+            )
+        merged[check.check_id] = GovernedMachineReadinessCheck(
+            check_id=existing.check_id,
+            required=existing.required,
+            evaluations=existing.evaluations + check.evaluations,
+            description=existing.description or check.description,
+        )
+    return tuple(sorted(merged.values(), key=lambda item: item.check_id))
+
+
+def _evaluate_snapshot(
+    snapshot: GovernedRuleEvaluationSnapshot,
+    *,
+    context: GovernedApplicabilityContext,
+) -> tuple[CheckCondition, str, bool]:
+    comparison = snapshot.comparison
+    applicability = comparison.applicability_result
+    if applicability is None:
+        return (
+            CheckCondition.UNRESOLVED,
+            "evaluation snapshot is missing the selected applicability result",
+            False,
+        )
+    if applicability.outcome is not ApplicabilityResolutionOutcome.SELECTED:
+        return (
+            CheckCondition.RULE_CONFLICT,
+            f"applicability result must be SELECTED; got {applicability.outcome.value}",
+            False,
+        )
+    if applicability.context != context:
+        return (
+            CheckCondition.CONTEXT_INSUFFICIENT,
+            "applicability context does not exactly match the MRC decision context",
+            False,
+        )
+    if (
+        applicability.selected_rule_id is None
+        or applicability.selected_revision is None
+    ):
+        return (
+            CheckCondition.UNRESOLVED,
+            "selected applicability result is missing the governing rule identity",
+            False,
+        )
+    if (
+        applicability.selected_rule_id.strip() != comparison.rule_id.strip()
+        or applicability.selected_revision.strip() != comparison.revision.strip()
+    ):
+        return (
+            CheckCondition.UNRESOLVED,
+            (
+                "selected applicability pin does not match the supplied "
+                "rule-evaluation revision identity"
+            ),
+            False,
+        )
+
+    selected = _selected_candidate(applicability)
+    if selected is None:
+        return (
+            CheckCondition.UNRESOLVED,
+            "selected applicability result does not carry a selected candidate snapshot",
+            False,
+        )
+    if selected.evidence_class is not EvidenceClass.SOURCE_BACKED:
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "selected candidate is not SOURCE_BACKED",
+            False,
+        )
+    if not selected.enabled or not selected.active:
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "selected candidate is not ENABLED and ACTIVE",
+            False,
+        )
+    if selected.suspended or selected.revoked or selected.superseded:
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "selected candidate basis is suspended, revoked, or superseded",
+            False,
+        )
+    if not selected.basis_valid:
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "selected candidate basis is invalidated",
+            False,
+        )
+    if (
+        selected.effective_from > applicability.decision_time
+        or (
+            selected.expires_at is not None
+            and applicability.decision_time >= selected.expires_at
+        )
+    ):
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "selected candidate basis is outside its effective window",
+            False,
+        )
+
+    if comparison.outcome.value == "SATISFIED":
+        return CheckCondition.PASSED, "evaluation snapshot is SATISFIED", True
+    if comparison.outcome.value == "NOT_SATISFIED":
+        return (
+            CheckCondition.FAILED,
+            "evaluation snapshot is NOT_SATISFIED",
+            True,
+        )
+    if comparison.outcome.value == "UNRESOLVED":
+        return CheckCondition.UNRESOLVED, "evaluation snapshot is UNRESOLVED", False
+    if comparison.outcome.value == "UNIT_MISMATCH":
+        return (
+            CheckCondition.EVIDENCE_UNAVAILABLE,
+            "evaluation snapshot has UNIT_MISMATCH",
+            False,
+        )
+    return (
+        CheckCondition.NOT_APPLICABLE_VERSION,
+        "evaluation snapshot is NOT_APPLICABLE",
+        False,
+    )
+
+
+def evaluate_machine_readiness(
+    context: GovernedApplicabilityContext,
+    decision_time: datetime,
+    checks: Sequence[GovernedMachineReadinessCheck],
+) -> MachineReadinessResult:
+    """Aggregate governed check/evaluation snapshots into one MRC decision."""
+
+    if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+        raise ValueError("decision_time must be timezone-aware")
+
+    merged_checks = _merge_checks(checks)
+    check_traces: list[MachineReadinessCheckTrace] = []
+    valid_applicable_basis_count = 0
+    required_satisfied = 0
+    required_count = 0
+    required_not_ready = False
+    required_engineering = False
+    required_manual = False
+    required_missing = False
+
+    for check in merged_checks:
+        canonical_snapshots = _canonicalize_evaluations(check.evaluations)
+        if check.required:
+            required_count += 1
+
+        if len(canonical_snapshots) > 1:
+            condition = CheckCondition.RULE_CONFLICT
+            reason = (
+                "multiple distinct governed rule-evaluation snapshots were supplied "
+                "for the same check"
+            )
+            if check.required:
+                required_engineering = True
+            check_traces.append(
+                MachineReadinessCheckTrace(
+                    check_id=check.check_id,
+                    required=check.required,
+                    evaluations=canonical_snapshots,
+                    condition=condition,
+                    reason=reason,
+                )
+            )
+            continue
+
+        if not canonical_snapshots:
+            condition = CheckCondition.OBSERVATION_MISSING
+            reason = "no governed rule-evaluation snapshot was supplied"
+            if check.required:
+                required_missing = True
+            check_traces.append(
+                MachineReadinessCheckTrace(
+                    check_id=check.check_id,
+                    required=check.required,
+                    evaluations=(),
+                    condition=condition,
+                    reason=reason,
+                )
+            )
+            continue
+
+        snapshot = canonical_snapshots[0]
+        condition, reason, basis_valid = _evaluate_snapshot(
+            snapshot, context=context
+        )
+        if basis_valid and condition in (
+            CheckCondition.PASSED,
+            CheckCondition.FAILED,
+        ):
+            valid_applicable_basis_count += 1
+
+        if check.required:
+            if condition is CheckCondition.PASSED:
+                required_satisfied += 1
+            elif condition is CheckCondition.FAILED:
+                required_not_ready = True
+            elif condition in (
+                CheckCondition.UNRESOLVED,
+                CheckCondition.EVIDENCE_UNAVAILABLE,
+                CheckCondition.RULE_CONFLICT,
+                CheckCondition.NOT_APPLICABLE_VERSION,
+            ):
+                required_engineering = True
+            elif condition in (
+                CheckCondition.CONTEXT_INSUFFICIENT,
+                CheckCondition.OBSERVATION_MISSING,
+            ):
+                required_manual = True
+            else:
+                required_manual = True
+
+        check_traces.append(
+            MachineReadinessCheckTrace(
+                check_id=check.check_id,
+                required=check.required,
+                evaluations=canonical_snapshots,
+                condition=condition,
+                reason=reason,
+            )
+        )
+
+    all_required_satisfied = required_count == 0 or required_satisfied == required_count
+    any_required_applicable_basis = valid_applicable_basis_count > 0
+
+    if required_not_ready:
+        state = ReadinessState.NOT_READY
+    elif required_engineering:
+        state = ReadinessState.ENGINEERING_REVIEW_REQUIRED
+    elif required_manual:
+        state = ReadinessState.MANUAL_REVIEW_REQUIRED
+    elif required_missing and not any_required_applicable_basis:
+        state = ReadinessState.NOT_EVALUATED
+    elif required_missing:
+        state = ReadinessState.MANUAL_REVIEW_REQUIRED
+    elif not any_required_applicable_basis:
+        state = ReadinessState.NOT_EVALUATED
+    elif not all_required_satisfied:
+        state = ReadinessState.MANUAL_REVIEW_REQUIRED
+    else:
+        state = ReadinessState.READY
+
+    if state is ReadinessState.NOT_READY:
+        primary = [
+            trace
+            for trace in check_traces
+            if trace.required and trace.condition is CheckCondition.FAILED
+        ]
+        secondary_engineering = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.UNRESOLVED,
+                CheckCondition.EVIDENCE_UNAVAILABLE,
+                CheckCondition.RULE_CONFLICT,
+                CheckCondition.NOT_APPLICABLE_VERSION,
+            }
+        ]
+        secondary_manual = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.CONTEXT_INSUFFICIENT,
+                CheckCondition.OBSERVATION_MISSING,
+            }
+        ]
+        reasons = (
+            *(
+                f"validated failure: {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(primary, key=lambda item: item.check_id)
+            ),
+            *(
+                f"engineering blocker (secondary): {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(
+                    secondary_engineering, key=lambda item: item.check_id
+                )
+            ),
+            *(
+                f"manual blocker (secondary): {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(secondary_manual, key=lambda item: item.check_id)
+            ),
+        )
+    elif state is ReadinessState.ENGINEERING_REVIEW_REQUIRED:
+        primary = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.UNRESOLVED,
+                CheckCondition.EVIDENCE_UNAVAILABLE,
+                CheckCondition.RULE_CONFLICT,
+                CheckCondition.NOT_APPLICABLE_VERSION,
+            }
+        ]
+        secondary_manual = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.CONTEXT_INSUFFICIENT,
+                CheckCondition.OBSERVATION_MISSING,
+            }
+        ]
+        reasons = (
+            *(
+                f"engineering resolution required: {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(primary, key=lambda item: item.check_id)
+            ),
+            *(
+                f"manual blocker (secondary): {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(secondary_manual, key=lambda item: item.check_id)
+            ),
+        )
+    elif state is ReadinessState.MANUAL_REVIEW_REQUIRED:
+        primary = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.CONTEXT_INSUFFICIENT,
+                CheckCondition.OBSERVATION_MISSING,
+            }
+        ]
+        secondary_engineering = [
+            trace
+            for trace in check_traces
+            if trace.required
+            and trace.condition
+            in {
+                CheckCondition.UNRESOLVED,
+                CheckCondition.EVIDENCE_UNAVAILABLE,
+                CheckCondition.RULE_CONFLICT,
+                CheckCondition.NOT_APPLICABLE_VERSION,
+            }
+        ]
+        reasons = (
+            *(
+                f"manual review required: {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(primary, key=lambda item: item.check_id)
+            ),
+            *(
+                f"engineering blocker (secondary): {trace.check_id} "
+                f"({trace.condition.value})"
+                for trace in sorted(
+                    secondary_engineering, key=lambda item: item.check_id
+                )
+            ),
+        )
+    elif state is ReadinessState.NOT_EVALUATED:
+        reasons = (
+            "zero applicable validated engineering rules; no validated basis for readiness",
+        )
+    else:
+        reasons = (
+            "all required applicable checks passed and every READY prerequisite is satisfied",
+        )
+
+    prerequisites = tuple(
+        (
+            name,
+            value,
+        )
+        for name, value in (
+            (READY_PREREQUISITES[0], any_required_applicable_basis),
+            (READY_PREREQUISITES[1], all_required_satisfied),
+            (
+                READY_PREREQUISITES[2],
+                not required_engineering and not required_manual and not required_not_ready,
+            ),
+            (READY_PREREQUISITES[3], not required_engineering),
+            (READY_PREREQUISITES[4], not required_engineering),
+            (READY_PREREQUISITES[5], not required_manual),
+        )
+    )
+
+    return MachineReadinessResult(
+        state=state,
+        reasons=reasons,
+        prerequisites=prerequisites,
+        context=context,
+        decision_time=decision_time,
+        checks=tuple(sorted(check_traces, key=lambda item: item.check_id)),
+        validated_applicable_basis_count=valid_applicable_basis_count,
     )
