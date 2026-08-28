@@ -49,7 +49,13 @@ VERIFICATION_TABLES = {
     "evidence_verification_decisions",
 }
 EVALUATION_TABLES = {"rule_evaluations"}
-ALL_GOVERNED_TABLES = BASE_REGISTRY_TABLES | LIFECYCLE_TABLES | VERIFICATION_TABLES
+MRC_TABLES = {
+    "machine_readiness_assessments",
+    "machine_readiness_assessment_revisions",
+    "machine_readiness_check_results",
+}
+CORE_GOVERNED_TABLES = BASE_REGISTRY_TABLES | LIFECYCLE_TABLES | VERIFICATION_TABLES
+ALL_GOVERNED_TABLES = CORE_GOVERNED_TABLES | EVALUATION_TABLES | MRC_TABLES
 
 
 def _sqlite_url(database_path: Path) -> str:
@@ -245,13 +251,13 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert ALL_GOVERNED_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0008_rule_evaluation_persistence"
+                "0009_machine_readiness_persistence"
             )
             for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
         _assert_registry_schema_matches_models(
             migrated_engine,
-            ALL_GOVERNED_TABLES | EVALUATION_TABLES,
+            ALL_GOVERNED_TABLES,
         )
 
     _run_downgrade(monkeypatch, database_url, "0002_auth_audit")
@@ -551,7 +557,7 @@ def test_verification_authority_migration_round_trip(
     with _sqlite_engine(database_url) as upgraded_engine:
         upgraded_tables = set(inspect(upgraded_engine).get_table_names())
         assert VERIFICATION_TABLES <= upgraded_tables
-        _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
+        _assert_registry_schema_matches_models(upgraded_engine, CORE_GOVERNED_TABLES)
         with upgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
                 "0007_rule_lifecycle_events"
@@ -583,13 +589,10 @@ def test_rule_evaluation_persistence_migration_round_trip(
     with _sqlite_engine(database_url) as upgraded_engine:
         upgraded_tables = set(inspect(upgraded_engine).get_table_names())
         assert EVALUATION_TABLES <= upgraded_tables
-        _assert_registry_schema_matches_models(
-            upgraded_engine,
-            ALL_GOVERNED_TABLES | EVALUATION_TABLES,
-        )
+        _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
         with upgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0008_rule_evaluation_persistence"
+                "0009_machine_readiness_persistence"
             )
 
     _run_downgrade(monkeypatch, database_url, "0007_rule_lifecycle_events")
@@ -600,4 +603,34 @@ def test_rule_evaluation_persistence_migration_round_trip(
         with downgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
                 "0007_rule_lifecycle_events"
+            )
+
+
+def test_machine_readiness_persistence_migration_round_trip(
+    migration_database_dir,
+    monkeypatch,
+):
+    database_url = _sqlite_url(
+        migration_database_dir / "machine_readiness_persistence_migration.db"
+    )
+    _run_upgrade(monkeypatch, database_url, "0008_rule_evaluation_persistence")
+    with _sqlite_engine(database_url) as prior_engine:
+        assert MRC_TABLES.isdisjoint(inspect(prior_engine).get_table_names())
+
+    _run_upgrade(monkeypatch, database_url, "head")
+    with _sqlite_engine(database_url) as upgraded_engine:
+        upgraded_tables = set(inspect(upgraded_engine).get_table_names())
+        assert MRC_TABLES <= upgraded_tables
+        _assert_registry_schema_matches_models(upgraded_engine, ALL_GOVERNED_TABLES)
+        with upgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0009_machine_readiness_persistence"
+            )
+
+    _run_downgrade(monkeypatch, database_url, "0008_rule_evaluation_persistence")
+    with _sqlite_engine(database_url) as downgraded_engine:
+        assert MRC_TABLES.isdisjoint(inspect(downgraded_engine).get_table_names())
+        with downgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0008_rule_evaluation_persistence"
             )
