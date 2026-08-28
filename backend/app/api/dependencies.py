@@ -25,8 +25,8 @@ ROLE_PERMISSIONS = {
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer),
-    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+    db: Session = Depends(get_db),  # noqa: B008
 ) -> User:
     try:
         email = decode_token(credentials.credentials, "access")
@@ -39,8 +39,19 @@ def get_current_user(
     return user
 
 
+def get_governed_actor_user(user: User = Depends(get_current_user)) -> User:  # noqa: B008
+    """Return the authenticated durable human actor identity.
+
+    Governed API slices must not trust client-supplied actor identity or role
+    claims as authority. The authenticated durable ``User`` row is the only
+    actor identity source here.
+    """
+
+    return user
+
+
 def require_permission(permission: str):
-    def dependency(user: User = Depends(get_current_user)) -> User:
+    def dependency(user: User = Depends(get_current_user)) -> User:  # noqa: B008
         permissions = ROLE_PERMISSIONS.get(user.role, set())
         if "*" not in permissions and permission not in permissions:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
