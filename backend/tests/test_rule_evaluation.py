@@ -6,10 +6,20 @@ engineering meaning.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
+
 import pytest
 
 import app.domain.rule_evaluation as rule_comparison_module
-from app.domain.governance_types import ContentVersionMetadata
+from app.domain.governance_types import ContentVersionMetadata, EvidenceClass
+from app.domain.rule_applicability import (
+    ApplicabilityResolutionOutcome,
+    GovernedApplicabilityCandidate,
+    GovernedApplicabilityContext,
+    GovernedApplicabilityResolution,
+    resolve_governed_applicability,
+)
 from app.domain.rule_evaluation import (
     ComparisonAuthorityScope,
     Observation,
@@ -63,6 +73,28 @@ def _observation(
     parameter: str = "synthetic_parameter",
 ) -> Observation:
     return Observation(parameter=parameter, value=value, unit=unit)
+
+
+def _selected_applicability_result(
+    *,
+    rule_id: str = "SYN_RULE",
+    revision: str = "r1",
+) -> GovernedApplicabilityResolution:
+    candidate = GovernedApplicabilityCandidate(
+        candidate_id="candidate-1",
+        rule_id=rule_id,
+        revision=revision,
+        evidence_class=EvidenceClass.SOURCE_BACKED,
+        enabled=True,
+        active=True,
+        scope_snapshot={"customer": ["customer-a"]},
+        effective_from=datetime(2029, 12, 31, 0, 0, tzinfo=timezone.utc),
+    )
+    return resolve_governed_applicability(
+        GovernedApplicabilityContext(customer="customer-a"),
+        datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc),
+        [candidate],
+    )
 
 
 def test_min_requirement_passes_at_and_above_bound() -> None:
@@ -257,6 +289,111 @@ def test_repeated_evaluation_is_deterministic() -> None:
     first = compare_rule(requirement, _observation(11.0))
     second = compare_rule(requirement, _observation(11.0))
     assert first == second
+
+
+@pytest.mark.parametrize(
+    ("operator", "min_value", "max_value", "observed_value", "expected"),
+    [
+        (RuleOperator.MIN, 10.0, None, 10.0, RuleComparisonOutcome.SATISFIED),
+        (RuleOperator.MIN, 10.0, None, 9.0, RuleComparisonOutcome.NOT_SATISFIED),
+        (RuleOperator.MAX, None, 7.0, 7.0, RuleComparisonOutcome.SATISFIED),
+        (RuleOperator.MAX, None, 7.0, 7.5, RuleComparisonOutcome.NOT_SATISFIED),
+        (RuleOperator.RANGE, 2.0, 4.0, 3.0, RuleComparisonOutcome.SATISFIED),
+        (RuleOperator.RANGE, 2.0, 4.0, 5.0, RuleComparisonOutcome.NOT_SATISFIED),
+        (RuleOperator.EQUALS, 5.0, 5.0, 5.0, RuleComparisonOutcome.SATISFIED),
+        (RuleOperator.EQUALS, 5.0, 5.0, 5.5, RuleComparisonOutcome.NOT_SATISFIED),
+    ],
+)
+def test_governed_applicability_selected_pins_exact_revision_and_evaluates(
+    operator: RuleOperator,
+    min_value: float | None,
+    max_value: float | None,
+    observed_value: float,
+    expected: RuleComparisonOutcome,
+) -> None:
+    requirement = _requirement(
+        operator,
+        min_value=min_value,
+        max_value=max_value,
+    )
+    applicability_result = _selected_applicability_result()
+    comparison = compare_rule(
+        requirement,
+        _observation(observed_value),
+        applicability_result=applicability_result,
+    )
+
+    assert comparison.outcome is expected
+    assert comparison.applicability_result == applicability_result
+    assert comparison.applicability_result.outcome is (
+        ApplicabilityResolutionOutcome.SELECTED
+    )
+    assert comparison.rule_id == requirement.rule_id
+    assert comparison.revision == requirement.revision
+
+
+def test_governed_applicability_conflict_is_unresolved() -> None:
+    candidate_a = GovernedApplicabilityCandidate(
+        candidate_id="candidate-a",
+        rule_id="SYN_RULE",
+        revision="r1",
+        evidence_class=EvidenceClass.SOURCE_BACKED,
+        enabled=True,
+        active=True,
+        scope_snapshot={"customer": ["customer-a"]},
+        effective_from=datetime(2029, 12, 31, 0, 0, tzinfo=timezone.utc),
+    )
+    candidate_b = GovernedApplicabilityCandidate(
+        candidate_id="candidate-b",
+        rule_id="SYN_RULE",
+        revision="r1",
+        evidence_class=EvidenceClass.SOURCE_BACKED,
+        enabled=True,
+        active=True,
+        scope_snapshot={"customer": ["customer-a"]},
+        effective_from=datetime(2029, 12, 31, 0, 0, tzinfo=timezone.utc),
+    )
+    applicability_result = resolve_governed_applicability(
+        GovernedApplicabilityContext(customer="customer-a"),
+        datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc),
+        [candidate_a, candidate_b],
+    )
+
+    comparison = compare_rule(
+        _requirement(),
+        _observation(11.0),
+        applicability_result=applicability_result,
+    )
+
+    assert applicability_result.outcome is ApplicabilityResolutionOutcome.CONFLICT
+    assert comparison.outcome is RuleComparisonOutcome.UNRESOLVED
+    assert "SELECTED" in comparison.reason
+
+
+def test_governed_applicability_pin_mismatch_fails_closed() -> None:
+    applicability_result = _selected_applicability_result(rule_id="OTHER_RULE")
+    comparison = compare_rule(
+        _requirement(),
+        _observation(11.0),
+        applicability_result=applicability_result,
+    )
+
+    assert comparison.outcome is RuleComparisonOutcome.UNRESOLVED
+    assert "pin" in comparison.reason
+
+
+def test_governed_applicability_result_is_provenance_complete_and_immutable() -> None:
+    applicability_result = _selected_applicability_result()
+    comparison = compare_rule(
+        _requirement(),
+        _observation(11.0),
+        applicability_result=applicability_result,
+    )
+
+    assert comparison.applicability_result == applicability_result
+    assert comparison.conversion_provenance.policy_version is None
+    with pytest.raises(FrozenInstanceError):
+        comparison.rule_id = "changed"  # type: ignore[misc]
 
 
 def test_raw_requirement_produces_comparison_not_authoritative_evaluation() -> None:

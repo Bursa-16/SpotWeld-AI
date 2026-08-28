@@ -46,6 +46,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from app.domain.rule_applicability import (
+    ApplicabilityResolutionOutcome,
+    GovernedApplicabilityResolution,
+)
 from app.domain.rule_registry_types import RuleOperator
 from app.domain.unit_policy import (
     ConversionProvenance,
@@ -171,6 +175,7 @@ class RuleComparison:
     observed_value: float | None = None
     observed_unit: str | None = None
     compared_value: float | None = None
+    applicability_result: GovernedApplicabilityResolution | None = None
     authority_scope: ComparisonAuthorityScope = field(
         default=ComparisonAuthorityScope.DETERMINISTIC_COMPARISON_ONLY,
         init=False,
@@ -183,20 +188,20 @@ def _compare(
     requirement: RuleRequirement,
 ) -> tuple[RuleComparisonOutcome, str]:
     if operator is RuleOperator.MIN:
-        assert requirement.min_value is not None  # noqa: S101 - guaranteed by __post_init__
+        assert requirement.min_value is not None
         passed = compared_value >= requirement.min_value
         bound_text = f">= {requirement.min_value}"
     elif operator is RuleOperator.MAX:
-        assert requirement.max_value is not None  # noqa: S101 - guaranteed by __post_init__
+        assert requirement.max_value is not None
         passed = compared_value <= requirement.max_value
         bound_text = f"<= {requirement.max_value}"
     elif operator is RuleOperator.RANGE:
-        assert requirement.min_value is not None  # noqa: S101
-        assert requirement.max_value is not None  # noqa: S101
+        assert requirement.min_value is not None
+        assert requirement.max_value is not None
         passed = requirement.min_value <= compared_value <= requirement.max_value
         bound_text = f"in [{requirement.min_value}, {requirement.max_value}]"
     else:  # RuleOperator.EQUALS
-        assert requirement.min_value is not None  # noqa: S101 - guaranteed by __post_init__
+        assert requirement.min_value is not None
         passed = compared_value == requirement.min_value
         bound_text = f"== {requirement.min_value}"
 
@@ -216,6 +221,7 @@ def compare_rule(
     requirement: RuleRequirement,
     observation: Observation | None,
     *,
+    applicability_result: GovernedApplicabilityResolution | None = None,
     unit_context: UnitPolicyContext | None = None,
     unit_catalog: UnitPolicyCatalog | None = None,
 ) -> RuleComparison:
@@ -294,7 +300,46 @@ def compare_rule(
             observed_value=observed_value,
             observed_unit=observed_unit,
             compared_value=compared_value,
+            applicability_result=applicability_result,
         )
+
+    if applicability_result is not None:
+        if applicability_result.outcome is not ApplicabilityResolutionOutcome.SELECTED:
+            return _result(
+                RuleComparisonOutcome.UNRESOLVED,
+                (
+                    "applicability result must be SELECTED before comparison; "
+                    f"got {applicability_result.outcome.value}"
+                ),
+                observed_value=observation.value if observation is not None else None,
+                observed_unit=observation.unit if observation is not None else None,
+                compared_value=None,
+            )
+        if (
+            applicability_result.selected_rule_id is None
+            or applicability_result.selected_revision is None
+        ):
+            return _result(
+                RuleComparisonOutcome.UNRESOLVED,
+                "selected applicability result is missing the governing rule identity",
+                observed_value=observation.value if observation is not None else None,
+                observed_unit=observation.unit if observation is not None else None,
+                compared_value=None,
+            )
+        if (
+            applicability_result.selected_rule_id.strip() != requirement.rule_id.strip()
+            or applicability_result.selected_revision.strip() != requirement.revision.strip()
+        ):
+            return _result(
+                RuleComparisonOutcome.UNRESOLVED,
+                (
+                    "selected applicability pin does not match the supplied "
+                    "rule requirement identity"
+                ),
+                observed_value=observation.value if observation is not None else None,
+                observed_unit=observation.unit if observation is not None else None,
+                compared_value=None,
+            )
 
     if not requirement.enabled:
         return _result(
