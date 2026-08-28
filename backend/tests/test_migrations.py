@@ -5,19 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import app.models  # noqa: F401
 import pytest
-from alembic import command
 from alembic.config import Config
-from app.db.session import Base
-from app.domain.governance_types import (
-    ContentVersionMetadata,
-    EvidenceClass,
-    RuleLifecycleStatus,
-)
-from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
-from app.models.rule_registry import EngineeringRuleRevision
-from app.repositories.rule_registry_repository import RuleRegistryRepository
 from sqlalchemy import (
     CheckConstraint,
     ForeignKeyConstraint,
@@ -30,6 +19,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+import app.models  # noqa: F401
+from alembic import command
+from app.db.session import Base
+from app.domain.governance_types import (
+    ContentVersionMetadata,
+    EvidenceClass,
+    RuleLifecycleStatus,
+)
+from app.domain.rule_registry_types import MissingHandling, RuleCategory, SafeDefault
+from app.models.rule_registry import EngineeringRuleRevision
+from app.repositories.rule_registry_repository import RuleRegistryRepository
 
 BACKEND_ROOT = Path(__file__).parents[1]
 BASE_REGISTRY_TABLES = {
@@ -47,6 +48,7 @@ VERIFICATION_TABLES = {
     "evidence_verification_delegations",
     "evidence_verification_decisions",
 }
+EVALUATION_TABLES = {"rule_evaluations"}
 ALL_GOVERNED_TABLES = BASE_REGISTRY_TABLES | LIFECYCLE_TABLES | VERIFICATION_TABLES
 
 
@@ -243,11 +245,14 @@ def test_sqlite_registry_migration_upgrades_empty_and_downgrades_cleanly(
         assert ALL_GOVERNED_TABLES <= migrated_tables
         with migrated_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0007_rule_lifecycle_events"
+                "0008_rule_evaluation_persistence"
             )
             for table_name in ALL_GOVERNED_TABLES:
                 assert connection.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) == 0
-        _assert_registry_schema_matches_models(migrated_engine, ALL_GOVERNED_TABLES)
+        _assert_registry_schema_matches_models(
+            migrated_engine,
+            ALL_GOVERNED_TABLES | EVALUATION_TABLES,
+        )
 
     _run_downgrade(monkeypatch, database_url, "0002_auth_audit")
 
@@ -542,7 +547,7 @@ def test_verification_authority_migration_round_trip(
     with _sqlite_engine(database_url) as prior_engine:
         assert VERIFICATION_TABLES.isdisjoint(inspect(prior_engine).get_table_names())
 
-    _run_upgrade(monkeypatch, database_url, "head")
+    _run_upgrade(monkeypatch, database_url, "0007_rule_lifecycle_events")
     with _sqlite_engine(database_url) as upgraded_engine:
         upgraded_tables = set(inspect(upgraded_engine).get_table_names())
         assert VERIFICATION_TABLES <= upgraded_tables
@@ -560,4 +565,39 @@ def test_verification_authority_migration_round_trip(
         with downgraded_engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
                 "0005_registry_evidence_applicability"
+            )
+
+
+def test_rule_evaluation_persistence_migration_round_trip(
+    migration_database_dir,
+    monkeypatch,
+):
+    database_url = _sqlite_url(
+        migration_database_dir / "rule_evaluation_persistence_migration.db"
+    )
+    _run_upgrade(monkeypatch, database_url, "0007_rule_lifecycle_events")
+    with _sqlite_engine(database_url) as prior_engine:
+        assert EVALUATION_TABLES.isdisjoint(inspect(prior_engine).get_table_names())
+
+    _run_upgrade(monkeypatch, database_url, "head")
+    with _sqlite_engine(database_url) as upgraded_engine:
+        upgraded_tables = set(inspect(upgraded_engine).get_table_names())
+        assert EVALUATION_TABLES <= upgraded_tables
+        _assert_registry_schema_matches_models(
+            upgraded_engine,
+            ALL_GOVERNED_TABLES | EVALUATION_TABLES,
+        )
+        with upgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0008_rule_evaluation_persistence"
+            )
+
+    _run_downgrade(monkeypatch, database_url, "0007_rule_lifecycle_events")
+    with _sqlite_engine(database_url) as downgraded_engine:
+        assert EVALUATION_TABLES.isdisjoint(
+            inspect(downgraded_engine).get_table_names()
+        )
+        with downgraded_engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "0007_rule_lifecycle_events"
             )
