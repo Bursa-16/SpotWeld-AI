@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.dependencies import get_governed_actor_user
 from app.api.errors import governed_error_response
 from app.application.digital_weld_passport_service import (
+    DigitalWeldPassportLifecycleTransitionDraft,
     DigitalWeldPassportRevisionDraft,
     DigitalWeldPassportService,
 )
@@ -258,7 +259,7 @@ def _execute_dwp_command(
         idempotency_key=idempotency_key,
     )
     request_hash = _canonical_request_hash(payload=payload, actor_user_id=actor.id)
-    audit = _audit_metadata(payload=payload, actor=actor, idempotency_key=idempotency_key)
+    audit = _audit_metadata(payload=payload, actor=actor, idempotency_key=idempotency_key, detail={})
 
     with SessionLocal() as governed_session, GovernedUnitOfWork(governed_session) as unit_of_work:
         try:
