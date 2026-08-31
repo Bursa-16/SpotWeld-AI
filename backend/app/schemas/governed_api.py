@@ -31,6 +31,7 @@ from app.domain.rule_evaluation import (
 from app.domain.rule_registry_types import RuleOperator
 from app.domain.unit_policy import ConversionEntry, UnitPolicyCatalog, UnitPolicyContext
 from app.domain.verification_types import VerificationScopeSnapshot
+from app.models.digital_weld_passport import DigitalWeldPassportLifecycleState
 
 
 class GovernedScopeSnapshot(BaseModel):
@@ -68,6 +69,105 @@ class EvidenceVerificationResponse(BaseModel):
     evidence_reference_id: int
     verifier_user_id: int
     requested_scope: GovernedScopeSnapshot
+    idempotency_key: str
+    command_namespace: str
+    command_scope: str
+    correlation_id: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigitalWeldPassportRuleEvaluationReferenceSnapshot(BaseModel):
+    evaluation_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigitalWeldPassportProvenanceSnapshot(BaseModel):
+    rule_evaluations: list[DigitalWeldPassportRuleEvaluationReferenceSnapshot] = Field(
+        default_factory=list
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigitalWeldPassportContextSnapshot(BaseModel):
+    passport_id: str = Field(min_length=1, max_length=120)
+    weld_identity: dict[str, Any] = Field(default_factory=dict)
+    scope_snapshot: GovernedScopeSnapshot
+
+    model_config = ConfigDict(extra="forbid")
+
+    def as_domain(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+class DigitalWeldPassportMrcSnapshot(BaseModel):
+    assessment_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+    decision_time: datetime
+    state: ReadinessState
+    context_snapshot: dict[str, Any]
+    prerequisites_snapshot: dict[str, Any]
+    result_snapshot: dict[str, Any]
+    authority_snapshot: dict[str, Any]
+    validated_applicable_basis_count: int = Field(ge=0)
+    supersedes_assessment_revision_id: int | None = None
+    created_by_user_id: int | None = None
+    created_by_actor_id: str = Field(min_length=1, max_length=200)
+    schema_version: str = Field(min_length=1, max_length=120)
+    canonicalization_version: str = Field(min_length=1, max_length=120)
+    hash_algorithm: str = Field(min_length=1, max_length=40)
+    content_hash: str = Field(min_length=1, max_length=256)
+    software_version: str = Field(min_length=1, max_length=120)
+    correlation_id: str = Field(min_length=1, max_length=120)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigitalWeldPassportDraftRequest(BaseModel):
+    passport_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+    context_snapshot: DigitalWeldPassportContextSnapshot
+    provenance_snapshot: DigitalWeldPassportProvenanceSnapshot = Field(
+        default_factory=DigitalWeldPassportProvenanceSnapshot
+    )
+    authority_scope: GovernedScopeSnapshot
+    mrc_snapshot: DigitalWeldPassportMrcSnapshot
+    supersedes_revision_id: int | None = None
+    decision_reason: str = Field(min_length=1, max_length=5000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _validate_context(self):
+        if self.context_snapshot.passport_id != self.passport_id:
+            raise ValueError("context_snapshot passport_id must match passport_id")
+        return self
+
+
+class DigitalWeldPassportResponse(BaseModel):
+    decision_outcome: Literal[
+        "DRAFT",
+        "ENGINEERING_DEFINED",
+        "VALIDATION_PENDING",
+        "VALIDATED",
+        "APPROVED",
+        "PRODUCTION_ACTIVE",
+        "DENIED",
+    ]
+    result_type: str
+    result_id: str
+    result_revision: str
+    passport_id: str
+    revision_number: int
+    state: DigitalWeldPassportLifecycleState
+    context_snapshot: dict[str, Any]
+    provenance_snapshot: dict[str, Any]
+    authority_snapshot: dict[str, Any]
+    mrc_snapshot: dict[str, Any] | None = None
+    supersedes_revision_id: int | None = None
     idempotency_key: str
     command_namespace: str
     command_scope: str
