@@ -147,6 +147,17 @@ class DigitalWeldPassportDraftRequest(BaseModel):
         return self
 
 
+class DigitalWeldPassportLifecycleRequest(BaseModel):
+    passport_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+    authority_scope: GovernedScopeSnapshot
+    decision_reason: str = Field(min_length=1, max_length=5000)
+    mrc_snapshot: DigitalWeldPassportMrcSnapshot | None = None
+    supersedes_lifecycle_event_id: int = Field(gt=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class DigitalWeldPassportResponse(BaseModel):
     decision_outcome: Literal[
         "DRAFT",
