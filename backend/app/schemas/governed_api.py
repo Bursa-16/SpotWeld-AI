@@ -6,6 +6,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.governance_types import ContentVersionMetadata, EvidenceClass
+from app.domain.readiness import (
+    CheckCondition,
+    GovernedMachineReadinessCheck,
+    GovernedRuleEvaluationSnapshot,
+    MachineReadinessCheckTrace,
+    MachineReadinessResult,
+    ReadinessState,
+)
 from app.domain.rule_applicability import (
     ApplicabilityOutcome,
     ApplicabilityResolutionOutcome,
@@ -438,6 +446,132 @@ class RuleEvaluationPersistenceResponse(BaseModel):
     rule_revision: str
     parameter: str
     operator: RuleOperator
+    idempotency_key: str
+    command_namespace: str
+    command_scope: str
+    correlation_id: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MachineReadinessEvaluationSnapshot(BaseModel):
+    evaluation_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+    comparison: RuleEvaluationComparisonSnapshot
+
+    model_config = ConfigDict(extra="forbid")
+
+    def as_domain(self) -> GovernedRuleEvaluationSnapshot:
+        return GovernedRuleEvaluationSnapshot(
+            evaluation_id=self.evaluation_id,
+            revision_number=self.revision_number,
+            comparison=self.comparison.as_domain(),
+        )
+
+
+class MachineReadinessCheckDefinitionSnapshot(BaseModel):
+    check_id: str = Field(min_length=1, max_length=120)
+    required: bool
+    description: str | None = None
+    evaluations: list[MachineReadinessEvaluationSnapshot] = Field(
+        default_factory=list
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    def as_domain(self) -> GovernedMachineReadinessCheck:
+        return GovernedMachineReadinessCheck(
+            check_id=self.check_id,
+            required=self.required,
+            description=self.description,
+            evaluations=tuple(evaluation.as_domain() for evaluation in self.evaluations),
+        )
+
+
+class MachineReadinessCheckTraceSnapshot(MachineReadinessCheckDefinitionSnapshot):
+    condition: CheckCondition
+    reason: str = Field(min_length=1, max_length=5000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    def as_domain(self) -> MachineReadinessCheckTrace:
+        return MachineReadinessCheckTrace(
+            check_id=self.check_id,
+            required=self.required,
+            evaluations=tuple(evaluation.as_domain() for evaluation in self.evaluations),
+            condition=self.condition,
+            reason=self.reason,
+        )
+
+
+class MachineReadinessPrerequisiteSnapshot(BaseModel):
+    label: str = Field(min_length=1, max_length=5000)
+    satisfied: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MachineReadinessResultSnapshot(BaseModel):
+    state: ReadinessState
+    reasons: list[str] = Field(default_factory=list)
+    prerequisites: list[MachineReadinessPrerequisiteSnapshot] = Field(
+        default_factory=list
+    )
+    context: GovernedScopeSnapshot
+    decision_time: datetime
+    validated_applicable_basis_count: int = Field(ge=0)
+    checks: list[MachineReadinessCheckTraceSnapshot] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+    def as_domain(self) -> MachineReadinessResult:
+        return MachineReadinessResult(
+            state=self.state,
+            reasons=tuple(self.reasons),
+            prerequisites=tuple(
+                (prerequisite.label, prerequisite.satisfied)
+                for prerequisite in self.prerequisites
+            ),
+            context=GovernedApplicabilityContext(
+                customer=self.context.customer,
+                project=self.context.project,
+                site=self.context.site,
+                machine=self.context.machine,
+            ),
+            decision_time=self.decision_time,
+            checks=tuple(check.as_domain() for check in self.checks),
+            validated_applicable_basis_count=self.validated_applicable_basis_count,
+        )
+
+
+class MachineReadinessPersistenceRequest(BaseModel):
+    assessment_id: str = Field(min_length=1, max_length=120)
+    revision_number: int = Field(gt=0)
+    result: MachineReadinessResultSnapshot
+    checks: list[MachineReadinessCheckDefinitionSnapshot] = Field(default_factory=list)
+    supersedes_assessment_revision_id: int | None = None
+    decision_reason: str = Field(min_length=1, max_length=5000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MachineReadinessPersistenceResponse(BaseModel):
+    decision_outcome: Literal[
+        "READY",
+        "NOT_READY",
+        "ENGINEERING_REVIEW_REQUIRED",
+        "MANUAL_REVIEW_REQUIRED",
+        "NOT_EVALUATED",
+        "DENIED",
+    ]
+    result_type: str
+    result_id: str
+    result_revision: str
+    assessment_id: str
+    revision_number: int
+    supersedes_assessment_revision_id: int | None = None
+    result: MachineReadinessResultSnapshot
+    checks: list[MachineReadinessCheckDefinitionSnapshot] = Field(default_factory=list)
     idempotency_key: str
     command_namespace: str
     command_scope: str

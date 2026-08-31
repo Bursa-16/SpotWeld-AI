@@ -14,6 +14,7 @@ from app.api.v1.engineering import router as engineering_router
 from app.api.v1.evidence_verification import router as evidence_verification_router
 from app.api.v1.failure_probability import router as failure_probability_router
 from app.api.v1.health import router as health_router
+from app.api.v1.machine_readiness import router as machine_readiness_router
 from app.api.v1.optimization import router as optimization_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.rule_evaluation import router as rule_evaluation_router
@@ -61,6 +62,7 @@ app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(engineering_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 app.include_router(rule_evaluation_router, prefix="/api/v1")
+app.include_router(machine_readiness_router, prefix="/api/v1")
 app.include_router(rule_registry_router, prefix="/api/v1")
 app.include_router(evidence_verification_router, prefix="/api/v1")
 app.include_router(weld_analysis_router, prefix="/api/v1")
