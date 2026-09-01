@@ -9,13 +9,13 @@ Professional engineering decision-support software for **resistance spot welding
 
 ## Release Status
 
-### v3.0.0-alpha.1 — Governed Engineering Foundation
+### v3.0.0-alpha.2 — Governed API Integration
 
-The `v3.0.0-alpha.1` alpha establishes the governed backend architecture for deterministic, revision-pinned, auditable, reproducible, and fail-closed engineering decisions.
+The `v3.0.0-alpha.2` alpha extends the governed backend architecture with the governed API integration layer for deterministic, revision-pinned, auditable, reproducible, and fail-closed engineering decisions.
 
 ### Current Verification
 
-- Full backend suite: **298 passed**
+- Full backend suite: **361 passed**
 - Digital Weld Passport focused tests: **3 passed**
 - Migration tests: **11 passed**
 - Machine Readiness persistence tests: **8 passed**
@@ -23,6 +23,29 @@ The `v3.0.0-alpha.1` alpha establishes the governed backend architecture for det
 - Alembic migration chain: through **`0010_digital_weld_passport`**
 
 This is an **alpha prerelease**. The governed backend foundation is established, while broader API and frontend exposure of the new workflows remains future work.
+
+---
+
+## What's New in v3.0.0-alpha.2
+
+Phase 5 exposes the governed engineering chain through authenticated API boundaries:
+
+- Evidence Verification API
+- Engineering Rule Registry lifecycle API (SOURCE_BACKED → ENABLED → ACTIVE)
+- Governed Rule Evaluation API
+- Machine Readiness API
+- Digital Weld Passport Draft and Lifecycle API
+- Authenticated actor identity with actor-spoofing prevention
+- System Admin wildcard explicitly excluded from governed engineering authority
+- Exact revision and provenance pinning
+- Persistent command idempotency with replay/conflict/in-progress handling
+- Atomic governed state + audit + receipt transactions
+- No authoritative latest/current rule, evaluation, MRC, or DWP lookup
+- No GET-time recomputation of engineering truth
+- READY gate enforcement for DWP finalization
+- DWP separation-of-duties enforcement
+
+**Phase 6 — Cross-system E2E Validation is not included in this prerelease.**
 
 ---
 

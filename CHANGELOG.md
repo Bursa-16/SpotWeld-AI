@@ -1,5 +1,32 @@
 # Changelog
 
+## [3.0.0-alpha.2] - 2026-09-01
+
+### Added
+- Governed Evidence Verification API.
+- Governed Engineering Rule Registry lifecycle API.
+- Governed Rule Evaluation API.
+- Governed Machine Readiness API.
+- Governed Digital Weld Passport Draft and Lifecycle API.
+
+### Governance
+- Authenticated user identity is the authoritative API actor identity.
+- System Admin wildcard access does not grant governed engineering authority.
+- Exact revision/provenance pinning is preserved.
+- Governed writes, audit events, and idempotency receipts remain atomic.
+- No authoritative latest/current rule, evaluation, MRC, or DWP lookup.
+- GET/read operations do not recompute engineering truth.
+- DWP finalization retains READY gate and separation-of-duties controls.
+
+### Validation
+- Full backend regression suite: **361 passed**.
+- Phase 5 governed API targeted Ruff checks: **PASS**.
+
+### Scope
+This is an **alpha prerelease**.
+Phase 6 — Cross-system E2E Validation is not included in v3.0.0-alpha.2.
+
+
 ## [1.3.0] - 2026-07-17
 - Fixed frontend TypeScript build and API contract drift.
 - Stabilized Windows SQLite test teardown.
