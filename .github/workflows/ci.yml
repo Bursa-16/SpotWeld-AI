@@ -14,7 +14,32 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q
+      - run: python -m pytest -q tests
+  backend-postgresql:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: backend}}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: spotweld_test
+          POSTGRES_USER: spotweld
+          POSTGRES_PASSWORD: spotweld
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd 'pg_isready -U spotweld -d spotweld_test'
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_TEST_DATABASE_URL: postgresql+psycopg://spotweld:spotweld@localhost:5432/spotweld_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests_postgresql
   frontend:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: frontend}}
