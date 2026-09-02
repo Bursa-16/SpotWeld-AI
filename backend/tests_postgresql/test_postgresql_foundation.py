@@ -27,6 +27,8 @@ from app.repositories.idempotency_repository import IdempotencyRepository
 NOW = datetime(2032, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
 LATER = datetime(2032, 3, 4, 5, 7, 8, tzinfo=timezone.utc)
 EXPECTED_HEAD = '0010_digital_weld_passport'
+EARLIER_REVISION = '0004_persistent_idempotency'
+LONG_REVISION = '0005_registry_evidence_applicability'
 EXPECTED_GOVERNED_TABLES = {
     'engineering_rules',
     'engineering_rule_revisions',
@@ -72,15 +74,43 @@ def _reserve(
     )
 
 
-def test_postgresql_dialect_and_alembic_head(postgresql_engine) -> None:
+def _current_revision(database_engine) -> str:
+    with database_engine.connect() as connection:
+        return connection.scalar(text('SELECT version_num FROM alembic_version'))
+
+
+def test_fresh_postgresql_dialect_and_alembic_head(postgresql_engine) -> None:
     assert postgresql_engine.dialect.name == 'postgresql'
-
-    with postgresql_engine.connect() as connection:
-        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == (
-            EXPECTED_HEAD
-        )
-
+    assert _current_revision(postgresql_engine) == EXPECTED_HEAD
     assert EXPECTED_GOVERNED_TABLES <= set(inspect(postgresql_engine).get_table_names())
+
+
+def test_postgresql_upgrade_from_earlier_revision_preserves_full_revision_id(
+    earlier_revision_postgresql,
+) -> None:
+    migration = earlier_revision_postgresql
+    assert migration.engine.dialect.name == 'postgresql'
+    assert _current_revision(migration.engine) == EARLIER_REVISION
+
+    migration.upgrade(LONG_REVISION)
+    assert _current_revision(migration.engine) == LONG_REVISION
+    with migration.engine.connect() as connection:
+        version_capacity = connection.scalar(
+            text(
+                '''
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'alembic_version'
+                  AND column_name = 'version_num'
+                '''
+            )
+        )
+    assert version_capacity is not None
+    assert version_capacity >= len(LONG_REVISION)
+
+    migration.upgrade('head')
+    assert _current_revision(migration.engine) == EXPECTED_HEAD
 
 
 def test_postgresql_transaction_commit_and_rollback(postgresql_engine) -> None:
