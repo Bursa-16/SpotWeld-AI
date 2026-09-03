@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -47,7 +48,7 @@ class EvidenceVerificationDelegation(Base):
                 "evidence_verification_delegations.delegation_id",
                 "evidence_verification_delegations.id",
             ],
-            name="fk_evidence_verification_delegations_same_delegation_supersession",
+            name="fk_evidence_verification_delegations_delegation_supersession",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
@@ -135,7 +136,7 @@ class EvidenceVerificationDecision(Base):
                 "evidence_verification_decisions.verification_id",
                 "evidence_verification_decisions.id",
             ],
-            name="fk_evidence_verification_decisions_same_verification_supersession",
+            name="fk_evidence_verification_decisions_verification_supersession",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
@@ -147,6 +148,10 @@ class EvidenceVerificationDecision(Base):
             "OR supersedes_verification_decision_id != id",
             name="ck_evidence_verification_decisions_not_self_superseding",
         ),
+        Index(
+            "ix_evidence_verification_decisions_delegation_id",
+            "evidence_verification_delegation_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -157,7 +162,6 @@ class EvidenceVerificationDecision(Base):
     )
     evidence_verification_delegation_id: Mapped[int] = mapped_column(
         ForeignKey("evidence_verification_delegations.id", ondelete="RESTRICT"),
-        index=True,
     )
     verifier_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True

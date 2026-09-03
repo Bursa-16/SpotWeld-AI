@@ -182,12 +182,12 @@ def upgrade() -> None:
                 "digital_weld_passport_lifecycle_events.passport_revision_id",
                 "digital_weld_passport_lifecycle_events.id",
             ],
-            name="fk_digital_weld_passport_lifecycle_events_same_revision_supersession",
+            name="fk_digital_weld_passport_lifecycle_same_revision_supersession",
             ondelete="RESTRICT",
         ),
         sa.CheckConstraint(
             "revision_number > 0",
-            name="ck_digital_weld_passport_lifecycle_events_positive_revision_number",
+            name="ck_digital_weld_passport_lifecycle_positive_revision_number",
         ),
         sa.CheckConstraint(
             "supersedes_lifecycle_event_id IS NULL "

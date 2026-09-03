@@ -103,7 +103,7 @@ def upgrade():
                 "evidence_verification_delegations.delegation_id",
                 "evidence_verification_delegations.id",
             ],
-            name="fk_evidence_verification_delegations_same_delegation_supersession",
+            name="fk_evidence_verification_delegations_delegation_supersession",
             ondelete="RESTRICT",
         ),
         sa.CheckConstraint(
@@ -201,7 +201,7 @@ def upgrade():
                 "evidence_verification_decisions.verification_id",
                 "evidence_verification_decisions.id",
             ],
-            name="fk_evidence_verification_decisions_same_verification_supersession",
+            name="fk_evidence_verification_decisions_verification_supersession",
             ondelete="RESTRICT",
         ),
         sa.CheckConstraint(
@@ -220,7 +220,7 @@ def upgrade():
         ["evidence_reference_id"],
     )
     op.create_index(
-        "ix_evidence_verification_decisions_evidence_verification_delegation_id",
+        "ix_evidence_verification_decisions_delegation_id",
         "evidence_verification_decisions",
         ["evidence_verification_delegation_id"],
     )
@@ -246,7 +246,7 @@ def downgrade():
         table_name="evidence_verification_decisions",
     )
     op.drop_index(
-        "ix_evidence_verification_decisions_evidence_verification_delegation_id",
+        "ix_evidence_verification_decisions_delegation_id",
         table_name="evidence_verification_decisions",
     )
     op.drop_index(

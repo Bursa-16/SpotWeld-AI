@@ -71,12 +71,12 @@ class MachineReadinessAssessmentRevision(Base):
                 "machine_readiness_assessment_revisions.assessment_id",
                 "machine_readiness_assessment_revisions.id",
             ],
-            name="fk_machine_readiness_assessment_revisions_same_assessment_supersession",
+            name="fk_machine_readiness_assessment_rev_assessment_supersession",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
             "revision_number > 0",
-            name="ck_machine_readiness_assessment_revisions_positive_revision_number",
+            name="ck_machine_readiness_assessment_rev_positive_revision_number",
         ),
         CheckConstraint(
             "supersedes_assessment_revision_id IS NULL "
