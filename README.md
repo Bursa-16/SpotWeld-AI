@@ -9,9 +9,9 @@ Professional engineering decision-support software for **resistance spot welding
 
 ## Release Status
 
-### v3.0.0-alpha.2 — Governed API Integration
+### v3.0.0-alpha.3 — Governed Cross-System E2E Validation
 
-The `v3.0.0-alpha.2` alpha extends the governed backend architecture with the governed API integration layer for deterministic, revision-pinned, auditable, reproducible, and fail-closed engineering decisions.
+The `v3.0.0-alpha.3` alpha consolidates the Phase 6A governance validation milestone on top of the Phase 5 governed API integration. It strengthens the deterministic, revision-pinned, auditable, reproducible, and fail-closed engineering chain with real-PostgreSQL cross-system E2E coverage.
 
 ### Current Verification
 
@@ -22,30 +22,81 @@ The `v3.0.0-alpha.2` alpha extends the governed backend architecture with the go
 - Ruff: **PASS**
 - Alembic migration chain: through **`0010_digital_weld_passport`**
 
-This is an **alpha prerelease**. The governed backend foundation is established, while broader API and frontend exposure of the new workflows remains future work.
+This is an **alpha prerelease**. The Phase 6A governance validation milestone is closed; broader production enablement of the deferred lifecycle items (see "Known Limitations" below) remains future work.
 
 ---
 
-## What's New in v3.0.0-alpha.2
+## What's New in v3.0.0-alpha.3
 
-Phase 5 exposes the governed engineering chain through authenticated API boundaries:
+Phase 6A1–6A4 strengthens the Phase 5 governed engineering chain with real-PostgreSQL cross-system end-to-end coverage:
 
-- Evidence Verification API
-- Engineering Rule Registry lifecycle API (SOURCE_BACKED → ENABLED → ACTIVE)
-- Governed Rule Evaluation API
-- Machine Readiness API
-- Digital Weld Passport Draft and Lifecycle API
-- Authenticated actor identity with actor-spoofing prevention
-- System Admin wildcard explicitly excluded from governed engineering authority
-- Exact revision and provenance pinning
-- Persistent command idempotency with replay/conflict/in-progress handling
-- Atomic governed state + audit + receipt transactions
-- No authoritative latest/current rule, evaluation, MRC, or DWP lookup
-- No GET-time recomputation of engineering truth
-- READY gate enforcement for DWP finalization
-- DWP separation-of-duties enforcement
+- **Phase 6A1 — Real-PostgreSQL CI/test foundation**
+  - Real-PostgreSQL test fixture (`tests_postgresql/conftest.py`)
+  - Alembic PostgreSQL identifier-length, URL-interpolation, and
+    revision-capacity compatibility fixes
+  - CI JWT environment and health-check fixes
+  - Local PostgreSQL remains CI-only; no SQLite fallback
 
-**Phase 6 — Cross-system E2E Validation is not included in this prerelease.**
+- **Phase 6A2 — Governed PostgreSQL happy-path E2E**
+  - Full cross-system happy path: identity → draft → source-backed →
+    verified evidence → `SOURCE_BACKED` enablement → activation →
+    rule evaluation → machine readiness → digital weld passport
+  - Canonical-scope repair for lifecycle audit metadata
+    (`VerificationScopeSnapshot.as_dict()` shape, structurally
+    identical to the verified evidence decision's `resource_scope`)
+
+- **Phase 6A3 — Lifecycle denial-path E2E**
+  - `SEPARATION_OF_DUTIES_VIOLATION` (submitter must not enable/activate)
+  - `MISSING_SCOPE_SNAPSHOT` (omission never grants authority)
+  - `UNRESOLVED_BASIS` via scope-mismatch between audit authority
+    scope and verified evidence `resource_scope`
+  - `UNRESOLVED_BASIS` when the source-backed revision lacks a
+    verified evidence decision
+  - `UNRESOLVED_BASIS` when the source-backed revision has no
+    evidence references
+
+- **Phase 6A4 — Evidence-verification denial-path E2E**
+  - `MISSING_EVIDENCE_REFERENCE`
+  - `MISSING_DURABLE_HUMAN_VERIFIER`
+  - `MISSING_SUBMITTER_IDENTITY`
+  - `SEPARATION_OF_DUTIES_VIOLATION` (verifier ≠ submitter)
+  - `NO_MATCHING_DELEGATION`
+  - `DELEGATION_REVOKED`
+  - `DELEGATION_EXPIRED`
+  - `DELEGATION_NOT_YET_EFFECTIVE`
+  - `SCOPE_MISMATCH` (requested ≠ delegation)
+  - `REVOCATION_METADATA_INCOMPLETE`
+  - Idempotency `CONFLICT` (same key + different request hash must
+    fail closed by raising `ValueError` without writing a second
+    receipt or audit event)
+
+Each negative-path assertion persists a deterministic
+`GovernedAuditEvent` with the exact `entity_type`
+(`evidence_verification_denial` or
+`engineering_rule_lifecycle_denial`) and the exact `denial_code`. No
+authority is silently granted on omission or mismatch.
+
+### Known Limitations
+
+- `EVIDENCE_VERIFICATION_AUTHORITY_FOUNDATION` remains `BLOCKED` per
+  SDS-115 §22. Phase 6A4 covers the foundation with regression tests
+  but does not declare it production-enabled.
+- `SOURCE_BACKED_PROMOTION`, `RULE_ENABLEMENT`, `RULE_ACTIVATION`,
+  `GOVERNED_APPLICABILITY`, and `RULE_EVALUATION_PERSISTENCE` remain
+  `DEFERRED` per SDS-115 §22.
+- `MIGRATION_0006_ALLOWED = NO` per SDS-115 §22. Migration 0006 is
+  present in the repository but the runtime foundation is not
+  declared production-enabled.
+- `IMPLEMENTATION_UNLOCKED = NO` per SDS-115 §22.
+- `INVALID_CAPABILITY` defensive branch in
+  `EvidenceVerificationService` is unreachable through the production
+  repository invariant and is therefore not covered by a negative-path
+  test.
+
+**Phase 7 and later — production enablement of the deferred lifecycle
+items, concession-based release workflows, full frontend integration,
+and external system integrations remain future work and are not part
+of v3.0.0-alpha.3.**
 
 ---
 
