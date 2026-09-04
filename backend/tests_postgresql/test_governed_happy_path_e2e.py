@@ -100,6 +100,11 @@ EVALUATION_ID = "phase-6a2-evaluation"
 ASSESSMENT_ID = "phase-6a2-assessment"
 PASSPORT_ID = "phase-6a2-passport"
 PROJECT_SCOPE = {"project": "phase-6a2-project"}
+# Canonical 4-dimension lifecycle scope: the governed enable/activate basis
+# check requires exact equality with the verification authority resource_scope
+# (VerificationScopeSnapshot.as_dict()), so lifecycle audits must pin the same
+# canonical snapshot instead of the short project-only scope.
+LIFECYCLE_SCOPE = VerificationScopeSnapshot(project=str(PROJECT_SCOPE["project"])).as_dict()
 DECISION_TIME = datetime(2037, 1, 2, 12, 0, tzinfo=timezone.utc)
 BASE_TIME = datetime(2037, 1, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -158,6 +163,7 @@ def _audit(
     actor_user_id: int,
     idempotency_key: str,
     reason: str,
+    authority_scope: dict[str, object] = PROJECT_SCOPE,
 ) -> GovernedAuditMetadata:
     return GovernedAuditMetadata(
         event_id=event_id,
@@ -165,7 +171,7 @@ def _audit(
         actor_type="user",
         actor_user_id=actor_user_id,
         actor_role=str(actor["role"]),
-        authority_scope=PROJECT_SCOPE,
+        authority_scope=authority_scope,
         reason=reason,
         correlation_id=f"phase-6a2:{event_id}",
         idempotency_key=idempotency_key,
@@ -487,6 +493,7 @@ def test_governed_registry_to_production_active_passport_on_postgresql(
                         actor_user_id=user_ids["approver"],
                         idempotency_key=key,
                         reason=f"{event_type.value.title()} exact source-backed revision",
+                        authority_scope=LIFECYCLE_SCOPE,
                     ),
                     effective_from=BASE_TIME,
                     expires_at=BASE_TIME + timedelta(days=30),
@@ -512,7 +519,7 @@ def test_governed_registry_to_production_active_passport_on_postgresql(
         )
         assert active_revision is not None
         assert activation is not None
-        assert activation.scope_snapshot == PROJECT_SCOPE
+        assert activation.scope_snapshot == LIFECYCLE_SCOPE
         candidate = GovernedApplicabilityCandidate(
             candidate_id=f"{RULE_ID}:{RULE_REVISION}",
             rule_id=RULE_ID,
