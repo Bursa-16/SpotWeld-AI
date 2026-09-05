@@ -9,11 +9,11 @@ Phase 6A2 happy-path E2E. Covers:
   - MISSING_DURABLE_HUMAN_VERIFIER (verifier user is inactive)  [Phase 6A5]
   - MISSING_SUBMITTER_IDENTITY
   - SEPARATION_OF_DUTIES_VIOLATION (submitter == verifier)
-  - NO_MATCHING_DELEGATION
+  - NO_MATCHING_DELEGATION (no delegation exists, and a requested
+    scope that differs from the delegation's scope)
   - DELEGATION_REVOKED
   - DELEGATION_EXPIRED
   - DELEGATION_NOT_YET_EFFECTIVE
-  - SCOPE_MISMATCH
   - REVOCATION_METADATA_INCOMPLETE
   - Idempotency CONFLICT (same key + different request_hash)
 
@@ -21,6 +21,15 @@ INVALID_CAPABILITY is intentionally not covered: the repository's
 create_delegation_revision invariant rejects non-EVIDENCE_VERIFICATION
 capability at insert time, so the production path cannot reach the
 deny branch.
+
+SCOPE_MISMATCH is likewise not observable as a distinct denial: the
+repository's find_matching_delegation lookup is itself scope-gated
+(exact scope_snapshot equality), so a request whose scope differs
+from the delegation's scope fails closed earlier with
+NO_MATCHING_DELEGATION. The service-level SCOPE_MISMATCH branch is
+defense-in-depth that cannot be reached through the public repository
+API, so the scope-mismatch scenario asserts the NO_MATCHING_DELEGATION
+denial it actually produces.
 
 The MISSING_DURABLE_HUMAN_VERIFIER branch has two production-reachable
 inputs (verifier row absent vs. verifier row present but is_active=False)
@@ -35,7 +44,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.application.evidence_verification_service import EvidenceVerificationService
@@ -46,11 +55,13 @@ from app.domain.rule_registry_types import (
     EvidenceReferenceDraft,
     MissingHandling,
     RuleCategory,
+    RuleSourceType,
     SafeDefault,
 )
 from app.domain.governance_types import (
     ContentVersionMetadata,
     EvidenceClass,
+    RuleLifecycleStatus,
 )
 from app.domain.verification_types import (
     EvidenceVerificationCommand,
@@ -149,18 +160,77 @@ def _audit(
 
 
 def _seed_users(session: Session) -> dict[str, int]:
-    users = {
-        key: User(
-            email=str(actor["email"]),
-            full_name=str(actor["name"]),
-            password_hash=f"hash-{key}",
-            role=str(actor["role"]),
+    """Idempotently materialize the fixed Phase 6A4 ACTORS users.
+
+    The PostgreSQL test session is session-scoped (see
+    ``tests_postgresql/conftest.py``'s ``postgresql_engine`` fixture),
+    so the migrated schema is shared across every evidence-verification
+    test in the file. A previous test in the same session has already
+    inserted the same fixed-emails rows; a naive second insert would
+    collide with the ``users_email_key`` unique constraint and raise
+    ``psycopg.errors.UniqueViolation``.
+
+    The function therefore:
+
+      1. Queries the durable ``User`` row for each ACTOR's fixed email.
+      2. If no row exists, creates one with the same constructor
+         fields used previously (including the model default
+         ``is_active=True``).
+      3. If a row already exists, reuses it and rejects unexpected
+         drift on the important fixture properties
+         (``full_name``, ``role``, ``is_active == True``). Drift
+         fails closed: a runtime error is raised instead of silently
+         reusing a row that does not match the test fixture's
+         contract. This preserves the fail-closed governance
+         posture of the rest of this file.
+      4. Returns the same ``dict[str, int]`` mapping ACTOR key to
+         the durable ``User.id`` (whether the row was newly
+         inserted or reused).
+
+    The function does NOT delete rows between tests and does NOT use
+    random identities; the same deterministic Phase 6A4 actors are
+    reused across the session.
+    """
+    result: dict[str, int] = {}
+    for key, actor in ACTORS.items():
+        email = str(actor["email"])
+        expected_full_name = str(actor["name"])
+        expected_role = str(actor["role"])
+        existing = session.scalar(
+            select(User).where(User.email == email)
         )
-        for key, actor in ACTORS.items()
-    }
-    session.add_all(users.values())
-    session.flush()
-    return {key: user.id for key, user in users.items()}
+        if existing is None:
+            user = User(
+                email=email,
+                full_name=expected_full_name,
+                password_hash=f"hash-{key}",
+                role=expected_role,
+            )
+            session.add(user)
+            session.flush()
+        else:
+            # Reuse the durable row, but fail closed on unexpected
+            # drift in the fixture properties other tests in this
+            # session rely on.
+            if existing.full_name != expected_full_name:
+                raise RuntimeError(
+                    f"Phase 6A4 ACTORS drift: user {email!r} has "
+                    f"full_name={existing.full_name!r}, expected "
+                    f"{expected_full_name!r}"
+                )
+            if existing.role != expected_role:
+                raise RuntimeError(
+                    f"Phase 6A4 ACTORS drift: user {email!r} has "
+                    f"role={existing.role!r}, expected {expected_role!r}"
+                )
+            if not existing.is_active:
+                raise RuntimeError(
+                    f"Phase 6A4 ACTORS drift: user {email!r} is "
+                    f"inactive; expected is_active=True"
+                )
+            user = existing
+        result[key] = user.id
+    return result
 
 
 def _version_metadata() -> ContentVersionMetadata:
@@ -177,11 +247,27 @@ def _make_registry_service(session: Session):
     from app.application.governed_audit_service import GovernedAuditService
     from app.application.governed_idempotency_service import GovernedIdempotencyService
     from app.application.rule_registry_service import RuleRegistryService
+    from app.repositories.governance_repository import GovernanceRepository
+    from app.repositories.idempotency_repository import IdempotencyRepository
     from app.repositories.rule_registry_repository import RuleRegistryRepository
 
     class _Uow:
+        """Test-only Unit-of-Work stub that satisfies the current governed
+        service contract.
+
+        GovernedAuditService accesses ``unit_of_work.governance_repository``
+        in its constructor and GovernedIdempotencyService accesses
+        ``unit_of_work.idempotency_repository``. The real
+        GovernedUnitOfWork wires these against the same SQLAlchemy
+        Session; this lightweight _Uow mirrors exactly that wiring so
+        RuleRegistryService can be exercised in the test without standing
+        up the full GovernedUnitOfWork context manager.
+        """
+
         def __init__(self, s: Session) -> None:
             self.session = s
+            self.governance_repository = GovernanceRepository(s)
+            self.idempotency_repository = IdempotencyRepository(s)
 
         def ensure_open(self) -> None:
             return None
@@ -207,6 +293,12 @@ def _seed_draft_with_evidence(
 ) -> EvidenceReference:
     """Create a rule identity + draft carrying one evidence reference, and
     return the persisted EvidenceReference row.
+
+    ``verifier_user_id`` is accepted for call-site stability but is
+    intentionally not written to the evidence reference: per SDS-115
+    §§9-11, verification authority metadata (verifier identity, decision
+    time) is recorded exclusively on the EvidenceVerificationDecision
+    row, not on the reference.
     """
     service = _make_registry_service(session)
     service.create_identity(
@@ -222,12 +314,24 @@ def _seed_draft_with_evidence(
     evidence_draft = EvidenceReferenceDraft(
         evidence_id=evidence_id,
         evidence_revision="1.0",
-        source_document_id="SDS-115",
-        source_document_revision="0.1",
-        source_location="section-7",
-        availability="AVAILABLE",
-        verified_by_user_id=verifier_user_id,
-        verified_at=BASE_TIME - timedelta(days=2),
+        # SOURCE_BACKED is reserved for the evidence-verification
+        # decision, not the reference itself (the repository's
+        # create_revision invariant rejects SOURCE_BACKED references).
+        # UNRESOLVED + DRAFT is the correct unverified provenance state
+        # for a draft reference and passes the invariant.
+        evidence_class=EvidenceClass.UNRESOLVED,
+        lifecycle_status=RuleLifecycleStatus.DRAFT,
+        created_by_actor_id=str(ACTORS["submitter"]["email"]),
+        created_by_user_id=submitter_user_id,
+        source_type=RuleSourceType.COMPANY_STANDARD,
+        source_name="SpotWeld-AI Evidence Verification Authority Policy",
+        # Historical source_document_id / source_document_revision /
+        # source_location map to the current contract fields
+        # source_document / edition / section_reference.
+        source_document="SDS-115",
+        edition="0.1 Draft",
+        section_reference="section-7",
+        reference_uri=f"urn:spotweld-ai:test:{evidence_id}",
     )
     draft = service.create_draft_revision(
         rule_id=rule_id,
@@ -237,7 +341,9 @@ def _seed_draft_with_evidence(
         category=RuleCategory.OTHER,
         parameter=parameter,
         safe_default=SafeDefault.UNRESOLVED,
-        missing_handling=MissingHandling.MANUAL_REVIEW,
+        # MissingHandling has no MANUAL_REVIEW member (that value lives
+        # on SafeDefault); DATA_INSUFFICIENT is the governed default.
+        missing_handling=MissingHandling.DATA_INSUFFICIENT,
         reason_for_change=f"Seed DRAFT for {rule_id}",
         version_metadata=_version_metadata(),
         audit=_audit(
@@ -248,6 +354,11 @@ def _seed_draft_with_evidence(
             reason=f"Seed DRAFT for {rule_id}",
         ),
         evidence_references=(evidence_draft,),
+        # The repository's create_revision invariant rejects a
+        # SOURCE_BACKED rule revision without an explicit grant
+        # (rule_registry_repository.py lines 93-96). The grant mirrors
+        # the Phase 6A2/6A3 fixtures and is not a production bypass.
+        allow_source_backed=True,
     )
     return draft.evidence_references[0]
 
@@ -272,6 +383,13 @@ def _seed_active_delegation(
             scope_snapshot=scope,
             effective_from=effective_from,
             expires_at=expires_at,
+            # revoked_by_user_id / revoked_at / revoked_reason are
+            # required (no defaults) on the current
+            # EvidenceVerificationDelegationDraft contract; an ACTIVE
+            # delegation carries no revocation metadata.
+            revoked_by_user_id=None,
+            revoked_at=None,
+            revoked_reason=None,
             status=VerificationDelegationStatus.ACTIVE,
             capability=VerificationCapability.EVIDENCE_VERIFICATION,
             created_by_user_id=grantor_user_id,
@@ -466,7 +584,17 @@ def test_verification_denies_when_evidence_reference_lacks_submitter(
             parameter=f"{rule_id}_input",
             evidence_id="phase-6a4-missing-submitter-evidence",
         )
-        evidence_ref.created_by_user_id = None
+        # The EvidenceReference model is append-only
+        # (protect_immutable_model raises ImmutableRecordError when an
+        # ORM flush changes any column). The MISSING_SUBMITTER_IDENTITY
+        # defensive branch requires exactly that anomalous state, so it
+        # is produced with a Core UPDATE statement, which bypasses ORM
+        # mapper events the same way legacy-import data surgery would.
+        session.execute(
+            update(EvidenceReference)
+            .where(EvidenceReference.id == evidence_ref.id)
+            .values(created_by_user_id=None)
+        )
         session.commit()
     command = EvidenceVerificationCommand(
         evidence_reference_id=evidence_ref.id,
@@ -893,7 +1021,17 @@ def test_verification_denies_when_delegation_not_yet_effective(
 def test_verification_denies_when_requested_scope_mismatches_delegation(
     postgresql_engine,
 ) -> None:
-    """requested scope != delegation scope => SCOPE_MISMATCH (line 224)."""
+    """A request whose requested_scope differs from the delegation's
+    scope_snapshot must fail closed.
+
+    find_matching_delegation is itself scope-gated (exact scope_snapshot
+    equality, evidence_verification_repository.py line 61), so the
+    mismatch is caught at the delegation-lookup gate and production
+    emits NO_MATCHING_DELEGATION. The service-level SCOPE_MISMATCH
+    branch (line 224) is defense-in-depth that cannot be reached
+    through the public repository API; this test asserts the
+    fail-closed denial the production path actually produces.
+    """
     with Session(postgresql_engine) as session:
         user_ids = _seed_users(session)
         session.commit()
@@ -958,7 +1096,7 @@ def test_verification_denies_when_requested_scope_mismatches_delegation(
         _assert_denial_audit(
             session,
             evidence_reference_id=evidence_ref.id,
-            denial_code="SCOPE_MISMATCH",
+            denial_code="NO_MATCHING_DELEGATION",
         )
 
 
@@ -1034,18 +1172,22 @@ def test_verification_denies_when_revocation_metadata_incomplete(
         )
         session.commit()
         # The application checks REVOKED first (line 178). We must flip the
-        # status back to ACTIVE to expose the partial-revocation state.
-        revoked = session.scalar(
-            select(EvidenceVerificationDelegation)
+        # status back to ACTIVE to expose the partial-revocation state. The
+        # delegation model is append-only (protect_immutable_model raises
+        # ImmutableRecordError when an ORM flush changes any column), so
+        # the flip is done with a Core UPDATE statement, which bypasses
+        # ORM mapper events the same way manual database surgery would.
+        session.execute(
+            update(EvidenceVerificationDelegation)
             .where(
                 EvidenceVerificationDelegation.delegation_id
                 == "phase-6a4-revocation-incomplete-delegation"
             )
-            .order_by(EvidenceVerificationDelegation.revision_number.desc())
+            .values(
+                status=VerificationDelegationStatus.ACTIVE,
+                revoked_at=None,
+            )
         )
-        assert revoked is not None
-        revoked.status = VerificationDelegationStatus.ACTIVE
-        revoked.revoked_at = None
         session.commit()
     command = EvidenceVerificationCommand(
         evidence_reference_id=evidence_ref.id,
@@ -1239,16 +1381,32 @@ def test_verification_denies_when_verifier_user_is_inactive(
         session.commit()
     # Seed a separate User row that physically exists but is_active=False.
     # This is the production-reachable "former verifier disabled by admin"
-    # state the OR branch on line 106 must also catch.
-    inactive_verifier = User(
-        email="phase6a5-inactive-verifier@example.com",
-        full_name="Phase 6A5 Inactive Verifier",
-        password_hash="hash-inactive-verifier",
-        role="Verifier",
-        is_active=False,
-    )
+    # state the OR branch on line 106 must also catch. The seed is
+    # idempotent: the session-scoped PostgreSQL engine persists this row
+    # across tests, so a rerun must reuse it instead of colliding with
+    # the users_email_key unique constraint.
+    inactive_email = "phase6a5-inactive-verifier@example.com"
     with Session(postgresql_engine) as session:
-        session.add(inactive_verifier)
+        existing = session.scalar(select(User).where(User.email == inactive_email))
+        if existing is None:
+            inactive_verifier = User(
+                email=inactive_email,
+                full_name="Phase 6A5 Inactive Verifier",
+                password_hash="hash-inactive-verifier",
+                role="Verifier",
+                is_active=False,
+            )
+            session.add(inactive_verifier)
+            session.flush()
+        else:
+            # Reuse the durable row, but fail closed on unexpected drift:
+            # this fixture's contract is an inactive verifier.
+            inactive_verifier = existing
+            if inactive_verifier.is_active:
+                raise RuntimeError(
+                    "Phase 6A5 fixture drift: user "
+                    f"{inactive_email!r} is active; expected is_active=False"
+                )
         session.commit()
         inactive_verifier_id = inactive_verifier.id
     assert inactive_verifier_id not in (submitter_id, verifier_id), (

@@ -30,12 +30,14 @@ from app.application.rule_registry_service import (
 from app.domain.governance_types import (
     ContentVersionMetadata,
     EvidenceClass,
+    RuleLifecycleStatus,
 )
 from app.domain.idempotency_types import CanonicalRequestHash, CommandIdentity
 from app.domain.rule_registry_types import (
     EvidenceReferenceDraft,
     MissingHandling,
     RuleCategory,
+    RuleSourceType,
     SafeDefault,
 )
 from app.domain.verification_types import (
@@ -52,6 +54,8 @@ from app.models.rule_registry import EngineeringRuleRevision
 from app.repositories.evidence_verification_repository import (
     EvidenceVerificationRepository,
 )
+from app.repositories.governance_repository import GovernanceRepository
+from app.repositories.idempotency_repository import IdempotencyRepository
 
 
 RULE_ID = "PHASE_6A3_GOVERNED_NEGATIVE_PATH"
@@ -224,14 +228,76 @@ def _version_metadata() -> ContentVersionMetadata:
     )
 
 
+def _make_evidence_reference_draft(
+    *,
+    evidence_id: str,
+    submitter_user_id: int,
+) -> EvidenceReferenceDraft:
+    """Build an EvidenceReferenceDraft using the current production contract.
+
+    The current production EvidenceReferenceDraft requires
+    evidence_id, evidence_revision, evidence_class, lifecycle_status,
+    and created_by_actor_id. Verification metadata (verifier identity,
+    decision time, availability) does not live on the reference; it
+    lives on the EvidenceVerificationDecision row that the lifecycle
+    test seeds in _seed_delegation_and_verified_decision. The historical
+    source_document_id / source_document_revision / source_location /
+    availability / verified_by_user_id / verified_at fields that
+    earlier fixture versions used are not part of the current contract
+    and have been replaced with the equivalent semantic mappings:
+
+      - source_document_id  -> source_document
+      - source_document_revision -> edition
+      - source_location     -> section_reference
+      - verified_by_user_id / verified_at / availability -> recorded
+        exclusively on EvidenceVerificationDecision (the durable
+        authority and decision record), per SDS-115 §§9-11.
+    """
+    return EvidenceReferenceDraft(
+        evidence_id=evidence_id,
+        evidence_revision="1.0",
+        # The repository's create_revision invariant rejects any
+        # evidence reference whose evidence_class is SOURCE_BACKED
+        # (the SOURCE_BACKED state is reserved for the
+        # evidence-verification decision, not the reference itself).
+        # UNRESOLVED + DRAFT matches the Phase 6A2 happy-path E2E
+        # fixture and is the correct unverified provenance state for
+        # a draft that the lifecycle tests then deny.
+        evidence_class=EvidenceClass.UNRESOLVED,
+        lifecycle_status=RuleLifecycleStatus.DRAFT,
+        created_by_actor_id=str(ACTORS["submitter"]["email"]),
+        created_by_user_id=submitter_user_id,
+        source_type=RuleSourceType.COMPANY_STANDARD,
+        source_name="SpotWeld-AI Evidence Verification Authority Policy",
+        source_document="SDS-115",
+        edition="0.1 Draft",
+        section_reference="section-7",
+        reference_uri=f"urn:spotweld-ai:test:{evidence_id}",
+    )
+
+
 def _make_service(session: Session) -> RuleRegistryService:
     from app.application.governed_audit_service import GovernedAuditService
     from app.application.governed_idempotency_service import GovernedIdempotencyService
     from app.repositories.rule_registry_repository import RuleRegistryRepository
 
     class _Uow:
+        """Test-only Unit-of-Work stub that satisfies the current governed
+        service contract.
+
+        GovernedAuditService accesses ``unit_of_work.governance_repository``
+        in its constructor and GovernedIdempotencyService accesses
+        ``unit_of_work.idempotency_repository``. The real
+        GovernedUnitOfWork wires these against the same SQLAlchemy
+        Session; this lightweight _Uow mirrors exactly that wiring so
+        RuleRegistryService can be exercised in the test without standing
+        up the full GovernedUnitOfWork context manager.
+        """
+
         def __init__(self, s: Session) -> None:
             self.session = s
+            self.governance_repository = GovernanceRepository(s)
+            self.idempotency_repository = IdempotencyRepository(s)
 
         def ensure_open(self) -> None:
             return None
@@ -273,7 +339,7 @@ def _seed_draft(
         category=RuleCategory.OTHER,
         parameter=parameter,
         safe_default=SafeDefault.UNRESOLVED,
-        missing_handling=MissingHandling.MANUAL_REVIEW,
+        missing_handling=MissingHandling.DATA_INSUFFICIENT,
         reason_for_change=f"Seed DRAFT for {rule_id}",
         version_metadata=_version_metadata(),
         audit=_audit(
@@ -284,6 +350,13 @@ def _seed_draft(
             reason=f"Seed DRAFT for {rule_id}",
         ),
         evidence_references=evidence_references,
+        # The repository's create_revision invariant rejects
+        # SOURCE_BACKED evidence_class without an explicit
+        # allow_source_backed=True grant. This fixture seeds a
+        # SOURCE_BACKED draft so the lifecycle denial path can be
+        # exercised; the grant here mirrors the Phase 6A2 happy-path
+        # E2E and is not a production authority bypass.
+        allow_source_backed=True,
     )
 
 
@@ -298,15 +371,9 @@ def _seed_delegation_and_verified_decision(
     scope: VerificationScopeSnapshot,
     evidence_id: str,
 ) -> None:
-    evidence_draft = EvidenceReferenceDraft(
+    evidence_draft = _make_evidence_reference_draft(
         evidence_id=evidence_id,
-        evidence_revision="1.0",
-        source_document_id="SDS-115",
-        source_document_revision="0.1",
-        source_location="section-7",
-        availability="AVAILABLE",
-        verified_by_user_id=verifier_user_id,
-        verified_at=BASE_TIME - timedelta(days=2),
+        submitter_user_id=submitter_user_id,
     )
     draft = _seed_draft(
         session,
@@ -420,12 +487,21 @@ def _assert_denial_audit(
     entity_id: str,
     denial_code: str,
 ) -> GovernedAuditEvent:
+    # The five lifecycle negative-path tests in this file exercise
+    # the ENABLEMENT transition (RuleRegistryService.enable_source_backed).
+    # The current production denial_action for enablement is exactly
+    # "AUTHORIZE_SOURCE_BACKED_ENABLEMENT_DENIED", so the assertion
+    # targets that exact action name. Activation denials
+    # ("AUTHORIZE_SOURCE_BACKED_ACTIVATION_DENIED") are intentionally
+    # not in scope here and are out of scope for this file.
     event = session.scalar(
         select(GovernedAuditEvent)
         .where(
             GovernedAuditEvent.entity_id == entity_id,
+            GovernedAuditEvent.entity_type
+            == "engineering_rule_lifecycle_denial",
             GovernedAuditEvent.action
-            == "AUTHORIZE_SOURCE_BACKED_LIFECYCLE_DENIED",
+            == "AUTHORIZE_SOURCE_BACKED_ENABLEMENT_DENIED",
         )
         .order_by(GovernedAuditEvent.id.desc())
     )
@@ -488,13 +564,15 @@ def test_lifecycle_enablement_denies_when_actor_is_submitter(
     with Session(postgresql_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
-            result = service.enable_source_backed_revision(
+            result = service.enable_source_backed(
                 rule_id=rule_id,
                 source_revision=RULE_REVISION,
                 receipt_id="phase-6a3-sod-enable-receipt",
                 command_identity=identity,
                 request_hash=request_hash,
                 audit=audit,
+                effective_from=BASE_TIME,
+                expires_at=BASE_TIME + timedelta(days=30),
                 completed_at=BASE_TIME,
             )
             assert result.result_type == "engineering_rule_lifecycle_denial"
@@ -554,13 +632,15 @@ def test_lifecycle_enablement_denies_when_authority_scope_is_none(
     with Session(postgresql_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
-            result = service.enable_source_backed_revision(
+            result = service.enable_source_backed(
                 rule_id=rule_id,
                 source_revision=RULE_REVISION,
                 receipt_id="phase-6a3-missing-scope-receipt",
                 command_identity=identity,
                 request_hash=request_hash,
                 audit=audit,
+                effective_from=BASE_TIME,
+                expires_at=BASE_TIME + timedelta(days=30),
                 completed_at=BASE_TIME,
             )
             assert result.result_type == "engineering_rule_lifecycle_denial"
@@ -621,13 +701,15 @@ def test_lifecycle_enablement_denies_when_authority_scope_does_not_match_evidenc
     with Session(postgresql_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
-            result = service.enable_source_backed_revision(
+            result = service.enable_source_backed(
                 rule_id=rule_id,
                 source_revision=RULE_REVISION,
                 receipt_id="phase-6a3-scope-mismatch-enable-receipt",
                 command_identity=identity,
                 request_hash=request_hash,
                 audit=audit,
+                effective_from=BASE_TIME,
+                expires_at=BASE_TIME + timedelta(days=30),
                 completed_at=BASE_TIME,
             )
             assert result.result_type == "engineering_rule_lifecycle_denial"
@@ -654,19 +736,12 @@ def test_lifecycle_enablement_denies_when_no_verified_evidence_decision(
         user_ids = _seed_users(session)
         session.commit()
     submitter_id = user_ids["submitter"]
-    verifier_id = user_ids["verifier"]
     enabler_id = user_ids["enabler"]
     rule_id = f"{RULE_ID}_NO_VERIFIED"
     with Session(postgresql_engine) as session:
-        evidence_draft = EvidenceReferenceDraft(
+        evidence_draft = _make_evidence_reference_draft(
             evidence_id="phase-6a3-no-verified-evidence",
-            evidence_revision="1.0",
-            source_document_id="SDS-115",
-            source_document_revision="0.1",
-            source_location="section-7",
-            availability="AVAILABLE",
-            verified_by_user_id=verifier_id,
-            verified_at=BASE_TIME - timedelta(days=2),
+            submitter_user_id=submitter_id,
         )
         _seed_draft(
             session,
@@ -693,13 +768,15 @@ def test_lifecycle_enablement_denies_when_no_verified_evidence_decision(
     with Session(postgresql_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
-            result = service.enable_source_backed_revision(
+            result = service.enable_source_backed(
                 rule_id=rule_id,
                 source_revision=RULE_REVISION,
                 receipt_id="phase-6a3-no-verified-receipt",
                 command_identity=identity,
                 request_hash=request_hash,
                 audit=audit,
+                effective_from=BASE_TIME,
+                expires_at=BASE_TIME + timedelta(days=30),
                 completed_at=BASE_TIME,
             )
             assert result.result_type == "engineering_rule_lifecycle_denial"
@@ -753,13 +830,15 @@ def test_lifecycle_enablement_denies_when_draft_has_no_evidence_references(
     with Session(postgresql_engine) as session:
         with GovernedUnitOfWork(session) as unit_of_work:
             service = RuleRegistryService(unit_of_work)
-            result = service.enable_source_backed_revision(
+            result = service.enable_source_backed(
                 rule_id=rule_id,
                 source_revision=RULE_REVISION,
                 receipt_id="phase-6a3-no-evidence-receipt",
                 command_identity=identity,
                 request_hash=request_hash,
                 audit=audit,
+                effective_from=BASE_TIME,
+                expires_at=BASE_TIME + timedelta(days=30),
                 completed_at=BASE_TIME,
             )
             assert result.result_type == "engineering_rule_lifecycle_denial"
