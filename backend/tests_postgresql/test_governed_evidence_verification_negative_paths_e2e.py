@@ -1,4 +1,4 @@
-"""Real-PostgreSQL evidence-verification negative-path regression tests.
+﻿"""Real-PostgreSQL evidence-verification negative-path regression tests.
 
 Asserts the fail-closed contracts from SDS-115 Sections 4-14 and
 EvidenceVerificationService._deny. The deterministic inverse of the
@@ -290,9 +290,9 @@ def _seed_draft_with_evidence(
     name: str,
     parameter: str,
     evidence_id: str,
-) -> EvidenceReference:
+) -> int:
     """Create a rule identity + draft carrying one evidence reference, and
-    return the persisted EvidenceReference row.
+    return the durable integer id of the persisted EvidenceReference.
 
     ``verifier_user_id`` is accepted for call-site stability but is
     intentionally not written to the evidence reference: per SDS-115
@@ -359,8 +359,16 @@ def _seed_draft_with_evidence(
         # (rule_registry_repository.py lines 93-96). The grant mirrors
         # the Phase 6A2/6A3 fixtures and is not a production bypass.
         allow_source_backed=True,
-    )
-    return draft.evidence_references[0]
+        )
+    # Return a durable scalar id rather than the ORM instance: the caller
+    # closes/commits this Session before consuming the id, and accessing an
+    # attribute of a detached EvidenceReference raises
+    # DetachedInstanceError under SQLAlchemy's default expire_on_commit
+    # policy.
+    _evidence_reference = draft.evidence_references[0]
+    evidence_reference_id: int = _evidence_reference.id
+    assert evidence_reference_id is not None
+    return evidence_reference_id
 
 
 def _seed_active_delegation(
@@ -506,7 +514,7 @@ def test_verification_denies_when_verifier_user_does_not_exist(
     verifier_id = user_ids["verifier"]
     rule_id = f"{RULE_ID}_MISSING_VERIFIER"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -518,14 +526,14 @@ def test_verification_denies_when_verifier_user_does_not_exist(
         session.commit()
     sentinel_verifier_id = 999_999_999
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=sentinel_verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: verifier user does not exist",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-missing-verifier",
     )
     request_hash = _request_hash("phase-6a4-missing-verifier")
@@ -553,7 +561,7 @@ def test_verification_denies_when_verifier_user_does_not_exist(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="MISSING_DURABLE_HUMAN_VERIFIER",
         )
 
@@ -575,7 +583,7 @@ def test_verification_denies_when_evidence_reference_lacks_submitter(
     verifier_id = user_ids["verifier"]
     rule_id = f"{RULE_ID}_MISSING_SUBMITTER"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -592,19 +600,19 @@ def test_verification_denies_when_evidence_reference_lacks_submitter(
         # mapper events the same way legacy-import data surgery would.
         session.execute(
             update(EvidenceReference)
-            .where(EvidenceReference.id == evidence_ref.id)
+            .where(EvidenceReference.id == evidence_reference_id)
             .values(created_by_user_id=None)
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: evidence reference lacks submitter",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-missing-submitter",
     )
     request_hash = _request_hash("phase-6a4-missing-submitter")
@@ -632,7 +640,7 @@ def test_verification_denies_when_evidence_reference_lacks_submitter(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="MISSING_SUBMITTER_IDENTITY",
         )
 
@@ -649,7 +657,7 @@ def test_verification_denies_when_separation_of_duties_violated(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_SOD"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -671,14 +679,14 @@ def test_verification_denies_when_separation_of_duties_violated(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=submitter_id,  # == submitter
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: submitter is also the verifier",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-sod-violation",
     )
     request_hash = _request_hash("phase-6a4-sod-violation")
@@ -706,7 +714,7 @@ def test_verification_denies_when_separation_of_duties_violated(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="SEPARATION_OF_DUTIES_VIOLATION",
         )
 
@@ -722,7 +730,7 @@ def test_verification_denies_when_no_matching_delegation(
     verifier_id = user_ids["verifier"]
     rule_id = f"{RULE_ID}_NO_DELEGATION"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -733,14 +741,14 @@ def test_verification_denies_when_no_matching_delegation(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: no matching delegation",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-no-delegation",
     )
     request_hash = _request_hash("phase-6a4-no-delegation")
@@ -768,7 +776,7 @@ def test_verification_denies_when_no_matching_delegation(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="NO_MATCHING_DELEGATION",
         )
 
@@ -785,7 +793,7 @@ def test_verification_denies_when_delegation_revoked(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_REVOKED"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -834,14 +842,14 @@ def test_verification_denies_when_delegation_revoked(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: delegation has been revoked",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-revoked-delegation",
     )
     request_hash = _request_hash("phase-6a4-revoked-delegation")
@@ -869,7 +877,7 @@ def test_verification_denies_when_delegation_revoked(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="DELEGATION_REVOKED",
         )
 
@@ -886,7 +894,7 @@ def test_verification_denies_when_delegation_expired(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_EXPIRED"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -906,14 +914,14 @@ def test_verification_denies_when_delegation_expired(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: delegation has expired",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-expired-delegation",
     )
     request_hash = _request_hash("phase-6a4-expired-delegation")
@@ -941,7 +949,7 @@ def test_verification_denies_when_delegation_expired(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="DELEGATION_EXPIRED",
         )
 
@@ -958,7 +966,7 @@ def test_verification_denies_when_delegation_not_yet_effective(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_NOT_YET_EFFECTIVE"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -978,14 +986,14 @@ def test_verification_denies_when_delegation_not_yet_effective(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: delegation is not yet effective",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-not-yet-effective",
     )
     request_hash = _request_hash("phase-6a4-not-yet-effective")
@@ -1013,7 +1021,7 @@ def test_verification_denies_when_delegation_not_yet_effective(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="DELEGATION_NOT_YET_EFFECTIVE",
         )
 
@@ -1040,7 +1048,7 @@ def test_verification_denies_when_requested_scope_mismatches_delegation(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_SCOPE_MISMATCH"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -1060,14 +1068,14 @@ def test_verification_denies_when_requested_scope_mismatches_delegation(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project="other-project"),
         decision_reason="Sentinel: requested scope does not match delegation",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-scope-mismatch",
     )
     request_hash = _request_hash("phase-6a4-scope-mismatch")
@@ -1095,7 +1103,7 @@ def test_verification_denies_when_requested_scope_mismatches_delegation(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="NO_MATCHING_DELEGATION",
         )
 
@@ -1118,7 +1126,7 @@ def test_verification_denies_when_revocation_metadata_incomplete(
     grantor_id = user_ids["grantor"]
     rule_id = f"{RULE_ID}_REVOCATION_INCOMPLETE"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -1190,14 +1198,14 @@ def test_verification_denies_when_revocation_metadata_incomplete(
         )
         session.commit()
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: revocation metadata is incomplete",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a4-revocation-incomplete",
     )
     request_hash = _request_hash("phase-6a4-revocation-incomplete")
@@ -1225,7 +1233,7 @@ def test_verification_denies_when_revocation_metadata_incomplete(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="REVOCATION_METADATA_INCOMPLETE",
         )
 
@@ -1307,10 +1315,21 @@ def test_verification_idempotency_conflict_raises_on_changed_payload(
 
     # Exactly one durable denial audit + one durable command receipt.
     with Session(postgresql_engine) as session:
+        # Identify THIS test's single audit by its deterministic,
+        # test-scoped event_id. The MISSING_EVIDENCE_REFERENCE test above
+        # reuses the same 999_999_999 sentinel, so it shares the
+        # entity_id "evidence_reference:999999999". Filtering on
+        # entity_id alone double-counts that earlier audit under the
+        # session-scoped schema; event_id is unique per idempotency key
+        # and isolates exactly the one denial audit produced by this
+        # conflict command (the conflicting second command raises before
+        # _deny and creates no audit of its own).
         audit_count = session.scalar(
             select(__import__("sqlalchemy").func.count(GovernedAuditEvent.id)).where(
-                GovernedAuditEvent.entity_id
-                == f"evidence_reference:{missing_evidence_id}"
+                GovernedAuditEvent.event_id
+                == "phase-6a4-idempotency-conflict-audit",
+                GovernedAuditEvent.action
+                == "AUTHORIZE_EVIDENCE_VERIFICATION_DENIED",
             )
         )
         receipt_count = session.scalar(
@@ -1369,7 +1388,7 @@ def test_verification_denies_when_verifier_user_is_inactive(
     verifier_id = user_ids["verifier"]
     rule_id = f"{RULE_ID}_INACTIVE_VERIFIER"
     with Session(postgresql_engine) as session:
-        evidence_ref = _seed_draft_with_evidence(
+        evidence_reference_id = _seed_draft_with_evidence(
             session,
             submitter_user_id=submitter_id,
             verifier_user_id=verifier_id,
@@ -1413,14 +1432,14 @@ def test_verification_denies_when_verifier_user_is_inactive(
         "inactive verifier must be a distinct User row from the active actors"
     )
     command = EvidenceVerificationCommand(
-        evidence_reference_id=evidence_ref.id,
+        evidence_reference_id=evidence_reference_id,
         verifier_user_id=inactive_verifier_id,
         requested_scope=VerificationScopeSnapshot(project=PROJECT),
         decision_reason="Sentinel: verifier user is inactive",
     )
     identity = _identity(
         EvidenceVerificationService.COMMAND_NAMESPACE,
-        f"evidence:{evidence_ref.id}",
+        f"evidence:{evidence_reference_id}",
         "phase-6a5-inactive-verifier",
     )
     request_hash = _request_hash("phase-6a5-inactive-verifier")
@@ -1451,7 +1470,7 @@ def test_verification_denies_when_verifier_user_is_inactive(
     with Session(postgresql_engine) as session:
         _assert_denial_audit(
             session,
-            evidence_reference_id=evidence_ref.id,
+            evidence_reference_id=evidence_reference_id,
             denial_code="MISSING_DURABLE_HUMAN_VERIFIER",
         )
         # An inactive-verifier denial must not create a verification
@@ -1460,7 +1479,7 @@ def test_verification_denies_when_verifier_user_is_inactive(
         decision_count = session.scalar(
             select(func.count(EvidenceVerificationDecision.id)).where(
                 EvidenceVerificationDecision.evidence_reference_id
-                == evidence_ref.id
+                == evidence_reference_id
             )
         )
         assert decision_count == 0, (
@@ -1471,7 +1490,7 @@ def test_verification_denies_when_verifier_user_is_inactive(
         audit_count = session.scalar(
             select(func.count(GovernedAuditEvent.id)).where(
                 GovernedAuditEvent.entity_id
-                == f"evidence_reference:{evidence_ref.id}"
+                == f"evidence_reference:{evidence_reference_id}"
             )
         )
         receipt_count = session.scalar(

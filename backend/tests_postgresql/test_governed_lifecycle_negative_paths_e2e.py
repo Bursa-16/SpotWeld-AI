@@ -392,7 +392,14 @@ def _seed_delegation_and_verified_decision(
             granted_by_user_id=grantor_user_id,
             scope_snapshot=scope,
             effective_from=BASE_TIME - timedelta(days=1),
-            expires_at=BASE_TIME + timedelta(days=10),
+                        expires_at=BASE_TIME + timedelta(days=10),
+            # revoked_by_user_id / revoked_at / revoked_reason are
+            # required (no defaults) on the current
+            # EvidenceVerificationDelegationDraft contract; an ACTIVE
+            # delegation carries no revocation metadata.
+            revoked_by_user_id=None,
+            revoked_at=None,
+            revoked_reason=None,
             status=VerificationDelegationStatus.ACTIVE,
             capability=VerificationCapability.EVIDENCE_VERIFICATION,
             created_by_user_id=grantor_user_id,
