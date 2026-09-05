@@ -86,6 +86,15 @@ RULE_ID = "PHASE_6A4_GOVERNED_EVIDENCE_NEGATIVE"
 RULE_REVISION = "1.0"
 PROJECT = "phase-6a4-project"
 LIFECYCLE_SCOPE = VerificationScopeSnapshot(project=PROJECT).as_dict()
+# Unique canonical scopes for time-state delegation tests.  All three tests
+# (REVOKED / EXPIRED / NOT_YET_EFFECTIVE) share the same verifier_user_id.
+# find_matching_delegation selects by (verifier_user_id, capability, scope)
+# and returns the highest revision_number for the matching scope.
+# If EXPIRED and NOT_YET_EFFECTIVE used the same scope as REVOKED, and the
+# REVOKED test created a higher revision_number first, find_matching_delegation
+# would return the REVOKED row instead of the intended time-state delegation.
+EXPIRED_SCOPE = VerificationScopeSnapshot(project=f"{PROJECT}-expired")
+NOT_YET_EFFECTIVE_SCOPE = VerificationScopeSnapshot(project=f"{PROJECT}-not-yet-effective")
 BASE_TIME = datetime(2037, 3, 1, 12, 0, tzinfo=timezone.utc)
 
 
@@ -908,7 +917,7 @@ def test_verification_denies_when_delegation_expired(
             verifier_user_id=verifier_id,
             grantor_user_id=grantor_id,
             delegation_id="phase-6a4-expired-delegation",
-            scope=VerificationScopeSnapshot(project=PROJECT),
+            scope=EXPIRED_SCOPE,
             effective_from=BASE_TIME - timedelta(days=30),
             expires_at=BASE_TIME - timedelta(days=1),
         )
@@ -916,7 +925,7 @@ def test_verification_denies_when_delegation_expired(
     command = EvidenceVerificationCommand(
         evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
-        requested_scope=VerificationScopeSnapshot(project=PROJECT),
+        requested_scope=EXPIRED_SCOPE,
         decision_reason="Sentinel: delegation has expired",
     )
     identity = _identity(
@@ -954,6 +963,9 @@ def test_verification_denies_when_delegation_expired(
         )
 
 
+
+
+
 def test_verification_denies_when_delegation_not_yet_effective(
     postgresql_engine,
 ) -> None:
@@ -980,7 +992,7 @@ def test_verification_denies_when_delegation_not_yet_effective(
             verifier_user_id=verifier_id,
             grantor_user_id=grantor_id,
             delegation_id="phase-6a4-not-yet-effective-delegation",
-            scope=VerificationScopeSnapshot(project=PROJECT),
+            scope=NOT_YET_EFFECTIVE_SCOPE,
             effective_from=BASE_TIME + timedelta(days=1),  # future
             expires_at=BASE_TIME + timedelta(days=10),
         )
@@ -988,7 +1000,7 @@ def test_verification_denies_when_delegation_not_yet_effective(
     command = EvidenceVerificationCommand(
         evidence_reference_id=evidence_reference_id,
         verifier_user_id=verifier_id,
-        requested_scope=VerificationScopeSnapshot(project=PROJECT),
+        requested_scope=NOT_YET_EFFECTIVE_SCOPE,
         decision_reason="Sentinel: delegation is not yet effective",
     )
     identity = _identity(
