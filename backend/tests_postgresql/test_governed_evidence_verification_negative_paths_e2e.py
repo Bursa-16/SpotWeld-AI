@@ -5,7 +5,8 @@ EvidenceVerificationService._deny. The deterministic inverse of the
 Phase 6A2 happy-path E2E. Covers:
 
   - MISSING_EVIDENCE_REFERENCE
-  - MISSING_DURABLE_HUMAN_VERIFIER
+  - MISSING_DURABLE_HUMAN_VERIFIER (verifier user does not exist)
+  - MISSING_DURABLE_HUMAN_VERIFIER (verifier user is inactive)  [Phase 6A5]
   - MISSING_SUBMITTER_IDENTITY
   - SEPARATION_OF_DUTIES_VIOLATION (submitter == verifier)
   - NO_MATCHING_DELEGATION
@@ -20,6 +21,12 @@ INVALID_CAPABILITY is intentionally not covered: the repository's
 create_delegation_revision invariant rejects non-EVIDENCE_VERIFICATION
 capability at insert time, so the production path cannot reach the
 deny branch.
+
+The MISSING_DURABLE_HUMAN_VERIFIER branch has two production-reachable
+inputs (verifier row absent vs. verifier row present but is_active=False)
+that the SDS-115 §4 durable-human-User requirement and §12 deny-by-default
+rule both demand. Phase 6A4 covered the row-absent input; Phase 6A5 covers
+the row-present-but-inactive input.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.evidence_verification_service import EvidenceVerificationService
@@ -55,7 +62,10 @@ from app.domain.verification_types import (
 from app.models.entities import User
 from app.models.governance import GovernedAuditEvent, GovernedCommandReceipt
 from app.models.rule_registry import EvidenceReference
-from app.models.verification import EvidenceVerificationDelegation
+from app.models.verification import (
+    EvidenceVerificationDecision,
+    EvidenceVerificationDelegation,
+)
 from app.repositories.evidence_verification_repository import (
     EvidenceVerificationRepository,
 )
@@ -1173,5 +1183,150 @@ def test_verification_idempotency_conflict_raises_on_changed_payload(
         )
         assert receipt_count == 1, (
             f"idempotency conflict must not create a second command receipt, "
+            f"got {receipt_count}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6A5 — MISSING_DURABLE_HUMAN_VERIFIER (inactive-verifier) coverage
+# ---------------------------------------------------------------------------
+#
+# SDS-115 §4 requires the verifier to be a durable, active human User. §12
+# denies verification when the authority evidence is missing, unknown, or
+# otherwise invalid. EvidenceVerificationService line 105-114 enforces this
+# with a single OR branch:
+#
+#     if verifier is None or not verifier.is_active:
+#         return self._deny(... denial_code="MISSING_DURABLE_HUMAN_VERIFIER" ...)
+#
+# Phase 6A4 covered the verifier-is-None input (sentinel user id). Phase 6A5
+# closes the symmetric production-reachable input: a User row that exists in
+# the database but has is_active=False (e.g. an admin disabled a former
+# verifier). Without this test, a regression that split the OR into separate
+# branches and only denied the "row absent" case would not be detected.
+#
+# This remains a test-only increment. No source code, migration, model,
+# policy, or API surface is modified.
+
+
+def test_verification_denies_when_verifier_user_is_inactive(
+    postgresql_engine,
+) -> None:
+    """A verification command whose verifier_user_id resolves to a
+    durable human User row with is_active=False must fail closed with
+    denial code MISSING_DURABLE_HUMAN_VERIFIER (line 105-114).
+
+    Distinct from the Phase 6A4 sentinel-id case: here the User row
+    physically exists, but is_active=False. Per SDS-115 §4 and §12, an
+    inactive user is not a valid engineering-review authority subject.
+    """
+    with Session(postgresql_engine) as session:
+        user_ids = _seed_users(session)
+        session.commit()
+    submitter_id = user_ids["submitter"]
+    verifier_id = user_ids["verifier"]
+    rule_id = f"{RULE_ID}_INACTIVE_VERIFIER"
+    with Session(postgresql_engine) as session:
+        evidence_ref = _seed_draft_with_evidence(
+            session,
+            submitter_user_id=submitter_id,
+            verifier_user_id=verifier_id,
+            rule_id=rule_id,
+            name=f"{rule_id} draft",
+            parameter=f"{rule_id}_input",
+            evidence_id="phase-6a5-inactive-verifier-evidence",
+        )
+        session.commit()
+    # Seed a separate User row that physically exists but is_active=False.
+    # This is the production-reachable "former verifier disabled by admin"
+    # state the OR branch on line 106 must also catch.
+    inactive_verifier = User(
+        email="phase6a5-inactive-verifier@example.com",
+        full_name="Phase 6A5 Inactive Verifier",
+        password_hash="hash-inactive-verifier",
+        role="Verifier",
+        is_active=False,
+    )
+    with Session(postgresql_engine) as session:
+        session.add(inactive_verifier)
+        session.commit()
+        inactive_verifier_id = inactive_verifier.id
+    assert inactive_verifier_id not in (submitter_id, verifier_id), (
+        "inactive verifier must be a distinct User row from the active actors"
+    )
+    command = EvidenceVerificationCommand(
+        evidence_reference_id=evidence_ref.id,
+        verifier_user_id=inactive_verifier_id,
+        requested_scope=VerificationScopeSnapshot(project=PROJECT),
+        decision_reason="Sentinel: verifier user is inactive",
+    )
+    identity = _identity(
+        EvidenceVerificationService.COMMAND_NAMESPACE,
+        f"evidence:{evidence_ref.id}",
+        "phase-6a5-inactive-verifier",
+    )
+    request_hash = _request_hash("phase-6a5-inactive-verifier")
+    audit = _audit(
+        "phase-6a5-inactive-verifier-audit",
+        actor=ACTORS["verifier"],
+        actor_user_id=verifier_id,
+        idempotency_key="phase-6a5-inactive-verifier",
+        reason="Assert inactive durable human verifier denial",
+    )
+    with Session(postgresql_engine) as session:
+        with GovernedUnitOfWork(session) as unit_of_work:
+            service = EvidenceVerificationService(unit_of_work)
+            result = service.verify_evidence(
+                command=command,
+                receipt_id="phase-6a5-inactive-verifier-receipt",
+                command_identity=identity,
+                request_hash=request_hash,
+                audit=audit,
+                verification_id="phase-6a5-inactive-verifier-verification",
+                completed_at=BASE_TIME,
+            )
+            assert result.result_type == "evidence_verification_denial", (
+                f"inactive verifier must produce a denial, "
+                f"got result_type={result.result_type!r}"
+            )
+            unit_of_work.commit()
+    with Session(postgresql_engine) as session:
+        _assert_denial_audit(
+            session,
+            evidence_reference_id=evidence_ref.id,
+            denial_code="MISSING_DURABLE_HUMAN_VERIFIER",
+        )
+        # An inactive-verifier denial must not create a verification
+        # decision row. The decision row is reserved for the
+        # VERIFIED outcome.
+        decision_count = session.scalar(
+            select(func.count(EvidenceVerificationDecision.id)).where(
+                EvidenceVerificationDecision.evidence_reference_id
+                == evidence_ref.id
+            )
+        )
+        assert decision_count == 0, (
+            f"inactive verifier denial must not create a verification "
+            f"decision row, got {decision_count}"
+        )
+        # Exactly one durable denial audit + one durable command receipt.
+        audit_count = session.scalar(
+            select(func.count(GovernedAuditEvent.id)).where(
+                GovernedAuditEvent.entity_id
+                == f"evidence_reference:{evidence_ref.id}"
+            )
+        )
+        receipt_count = session.scalar(
+            select(func.count(GovernedCommandReceipt.id)).where(
+                GovernedCommandReceipt.idempotency_key
+                == "phase-6a5-inactive-verifier"
+            )
+        )
+        assert audit_count == 1, (
+            f"inactive verifier must produce exactly one denial audit, "
+            f"got {audit_count}"
+        )
+        assert receipt_count == 1, (
+            f"inactive verifier must produce exactly one command receipt, "
             f"got {receipt_count}"
         )
