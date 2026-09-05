@@ -139,18 +139,79 @@ def _audit(
 
 
 def _seed_users(session: Session) -> dict[str, int]:
-    users = {
-        key: User(
-            email=str(actor["email"]),
-            full_name=str(actor["name"]),
-            password_hash=f"hash-{key}",
-            role=str(actor["role"]),
+    """Idempotently materialize the fixed Phase 6A3 ACTORS users.
+
+    The PostgreSQL test session is session-scoped (see
+    ``tests_postgresql/conftest.py``'s ``postgresql_engine`` fixture),
+    so the migrated schema is shared across every lifecycle test in
+    the file. A previous test in the same session has already
+    inserted the same fixed-emails rows; a naive second insert would
+    collide with the ``users_email_key`` unique constraint and raise
+    ``psycopg.errors.UniqueViolation``.
+
+    The function therefore:
+
+      1. Queries the durable ``User`` row for each ACTOR's fixed
+         email.
+      2. If no row exists, creates one with the same constructor
+         fields used previously (including the model default
+         ``is_active=True``).
+      3. If a row already exists, reuses it and rejects unexpected
+         drift on the important fixture properties
+         (``full_name``, ``role``, ``is_active == True``). Drift
+         fails closed: a runtime error is raised instead of silently
+         reusing a row that does not match the test fixture's
+         contract. This preserves the fail-closed governance
+         posture of the rest of this file.
+      4. Returns the same ``dict[str, int]`` mapping ACTOR key to
+         the durable ``User.id`` (whether the row was newly
+         inserted or reused).
+
+    The function does NOT delete rows between tests and does NOT use
+    random identities; the same deterministic Phase 6A3 actors are
+    reused across the session.
+    """
+    result: dict[str, int] = {}
+    for key, actor in ACTORS.items():
+        email = str(actor["email"])
+        expected_full_name = str(actor["name"])
+        expected_role = str(actor["role"])
+        existing = session.scalar(
+            select(User).where(User.email == email)
         )
-        for key, actor in ACTORS.items()
-    }
-    session.add_all(users.values())
-    session.flush()
-    return {key: user.id for key, user in users.items()}
+        if existing is None:
+            user = User(
+                email=email,
+                full_name=expected_full_name,
+                password_hash=f"hash-{key}",
+                role=expected_role,
+            )
+            session.add(user)
+            session.flush()
+        else:
+            # Reuse the durable row, but fail closed on unexpected
+            # drift in the fixture properties other tests in this
+            # session rely on.
+            if existing.full_name != expected_full_name:
+                raise RuntimeError(
+                    f"Phase 6A3 ACTORS drift: user {email!r} has "
+                    f"full_name={existing.full_name!r}, expected "
+                    f"{expected_full_name!r}"
+                )
+            if existing.role != expected_role:
+                raise RuntimeError(
+                    f"Phase 6A3 ACTORS drift: user {email!r} has "
+                    f"role={existing.role!r}, expected "
+                    f"{expected_role!r}"
+                )
+            if not existing.is_active:
+                raise RuntimeError(
+                    f"Phase 6A3 ACTORS drift: user {email!r} is "
+                    f"inactive; expected is_active=True"
+                )
+            user = existing
+        result[key] = user.id
+    return result
 
 
 def _version_metadata() -> ContentVersionMetadata:
