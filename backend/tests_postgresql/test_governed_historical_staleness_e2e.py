@@ -172,7 +172,7 @@ def _ctx_snapshot() -> dict:
 def _create_resolution(rule_rev: EngineeringRuleRevision, dt: datetime):
     ctx = GovernedApplicabilityContext.from_mapping(_ctx_snapshot())
     cand = GovernedApplicabilityCandidate(
-        candidate_id=f"{rule_rev.rule_id}:{rule_rev.revision}", rule_id=rule_rev.rule_id,
+        candidate_id=f"{rule_rev.engineering_rule.rule_id}:{rule_rev.revision}", rule_id=rule_rev.engineering_rule.rule_id,
         revision=rule_rev.revision, evidence_class=rule_rev.evidence_class,
         enabled=rule_rev.enabled, active=rule_rev.is_active(), suspended=False,
         revoked=False, superseded=rule_rev.superseded, basis_valid=not rule_rev.is_expired(),
@@ -187,8 +187,8 @@ def _create_resolution(rule_rev: EngineeringRuleRevision, dt: datetime):
 def _load_applicability_candidate(rev: EngineeringRuleRevision, dt: datetime) -> GovernedApplicabilityCandidate:
     """Load a GovernedApplicabilityCandidate from a persisted EngineeringRuleRevision."""
     return GovernedApplicabilityCandidate(
-        candidate_id=f"{rev.rule_id}:{rev.revision}",
-        rule_id=rev.rule_id,
+        candidate_id=f"{rev.engineering_rule.rule_id}:{rev.revision}",
+        rule_id=rev.engineering_rule.rule_id,
         revision=rev.revision,
         evidence_class=rev.evidence_class,
         enabled=rev.enabled,
@@ -208,7 +208,7 @@ def _load_applicability_candidate(rev: EngineeringRuleRevision, dt: datetime) ->
 def _comparison(rule_rev: EngineeringRuleRevision, res) -> RuleComparison:
     obs = Observation(parameter="governed_input_present", value="true", unit=None)
     req = RuleRequirement(
-        rule_id=rule_rev.rule_id, revision=rule_rev.revision,
+        rule_id=rule_rev.engineering_rule.rule_id, revision=rule_rev.revision,
         parameter="governed_input_present", operator=RuleOperator.EQUALS,
         compared_value="true", safe_default=SafeDefault.UNRESOLVED,
         missing_handling=MissingHandling.DATA_INSUFFICIENT,
@@ -221,7 +221,7 @@ def _comparison(rule_rev: EngineeringRuleRevision, res) -> RuleComparison:
 def _create_evidence(session: Session, ev_ref, verifier_uid: int, verifier_role: str, grantor_uid: int) -> None:
     delegation = EvidenceVerificationDelegationDraft(
         evidence_reference_id=ev_ref.id, grantor_user_id=grantor_uid, delegate_user_id=verifier_uid,
-        capability=VerificationCapability.VERIFY_EXACT, status=VerificationDelegationStatus.ACTIVE,
+        capability=VerificationCapability.EVIDENCE_VERIFICATION, status=VerificationDelegationStatus.ACTIVE,
         granted_at=BASE_TIME, expires_at=None, scope_snapshot=LIFECYCLE_SCOPE, reason="Phase 6B1 delegation",
     )
     repo = EvidenceVerificationRepository(session)
@@ -314,7 +314,7 @@ def test_governed_historical_staleness_on_postgresql(postgresql_engine, monkeypa
 
         # Verify Revision 1
         with session:
-            rev1_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_1))
+            rev1_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_1))
             assert rev1_persisted is not None
             assert rev1_persisted.is_active()
             rev1_id = rev1_persisted.id
@@ -467,12 +467,12 @@ def test_governed_historical_staleness_on_postgresql(postgresql_engine, monkeypa
 
         # Verify Revision 2 properties
         with session:
-            rev2_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_2))
+            rev2_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_2))
             assert rev2_persisted is not None
             rev2_id = rev2_persisted.id
 
             # Core assertions: same rule_id, different IDs
-            assert rev2_persisted.rule_id == RULE_ID  # SAME_RULE_ID_USED = YES
+            assert rev2_persisted.engineering_rule.rule_id == RULE_ID  # SAME_RULE_ID_USED = YES
             assert rev2_persisted.id != rev1_id  # REV1_ID != REV2_ID
             assert rev2_persisted.supersedes_revision_id == rev1_id  # REV2_SUPERSEDES_REV1 = YES
             assert rev2_persisted.evidence_class is EvidenceClass.SOURCE_BACKED
@@ -511,7 +511,7 @@ def test_governed_historical_staleness_on_postgresql(postgresql_engine, monkeypa
             # Load both candidates from database and call resolve_governed_applicability
             rev1_persisted = session.scalar(
                 select(EngineeringRuleRevision).where(
-                    EngineeringRuleRevision.rule_id == RULE_ID,
+                    EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID),
                     EngineeringRuleRevision.revision == RULE_REVISION_1
                 )
             )
@@ -615,7 +615,7 @@ def test_governed_supersession_chain(postgresql_engine) -> None:
                 )
                 unit_of_work.commit()
 
-            rev1_id = session.scalar(select(EngineeringRuleRevision.id).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_1))
+            rev1_id = session.scalar(select(EngineeringRuleRevision.id).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_1))
 
             # Enable and activate Revision 1
             for event_type, namespace, minute in (
@@ -666,7 +666,7 @@ def test_governed_supersession_chain(postgresql_engine) -> None:
                 unit_of_work.commit()
 
             # Verify supersession chain
-            rev2_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_2))
+            rev2_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_2))
             assert rev2_persisted is not None
             assert rev2_persisted.supersedes_revision_id == rev1_id
 
@@ -690,12 +690,12 @@ def test_governed_supersession_chain(postgresql_engine) -> None:
                     unit_of_work.commit()
 
             # Verify Revision 2 is active
-            rev2_active = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_2))
+            rev2_active = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_2))
             assert rev2_active is not None
             assert rev2_active.is_active()
 
             # Verify Revision 1 is still queryable but superseded
-            rev1_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.rule_id == RULE_ID, EngineeringRuleRevision.revision == RULE_REVISION_1))
+            rev1_persisted = session.scalar(select(EngineeringRuleRevision).where(EngineeringRuleRevision.engineering_rule.has(rule_id=RULE_ID), EngineeringRuleRevision.revision == RULE_REVISION_1))
             assert rev1_persisted is not None
             assert rev1_persisted.id == rev1_id
             assert rev1_persisted.superseded is True
