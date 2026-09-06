@@ -90,14 +90,19 @@ def _audit(event_id: str, actor: dict, actor_user_id: int, idempotency_key: str,
     )
 
 
-def _seed_users(session: Session) -> dict:
-    users = {}
-    for name, actor in ACTORS.items():
-        user = User(email=actor["email"], name=actor["name"], role=actor["role"])
-        session.add(user)
-        session.flush()
-        users[name] = user.id
-    return users
+def _seed_users(session: Session) -> dict[str, int]:
+    users = {
+        key: User(
+            email=str(actor["email"]),
+            full_name=str(actor["name"]),
+            password_hash=f"hash-{key}",
+            role=str(actor["role"]),
+        )
+        for key, actor in ACTORS.items()
+    }
+    session.add_all(users.values())
+    session.flush()
+    return {key: user.id for key, user in users.items()}
 
 
 def _ctx_snapshot() -> dict:
